@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BANK-TING-TING 🔔</title>
+    <meta name="theme-color" content="#2196F3">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="BANK-TING-TING">
+    
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" type="image/png" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔔</text></svg>">
+</head>
+<body>
+    <div class="app-container">
+        <header class="header">
+            <h1>🏦 BANK-TING-TING</h1>
+            <div class="status-indicator" id="connectionStatus">
+                <span class="status-dot offline"></span>
+                <span>Đang kết nối...</span>
+            </div>
+        </header>
+
+        <div class="controls">
+            <button id="toggleSound" class="btn btn-primary">🔊 Bật âm thanh</button>
+            <button id="testNotification" class="btn btn-secondary">🧪 Test thông báo</button>
+            <button id="toggleTTS" class="btn btn-primary">🗣️ Bật đọc giọng nói</button>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value" id="totalTransactions">0</div>
+                <div class="stat-label">Tổng giao dịch</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="totalAmount">0₫</div>
+                <div class="stat-label">Tổng tiền</div>
+            </div>
+        </div>
+
+        <div class="transactions-container">
+            <h2>📊 Giao dịch gần đây</h2>
+            <div id="transactionsList" class="transactions-list">
+                <div class="no-transactions">
+                    Chưa có giao dịch nào...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="notificationPopup" class="notification-popup hidden">
+        <div class="notification-content">
+            <div class="notification-icon">💰</div>
+            <div class="notification-details">
+                <div class="notification-amount"></div>
+                <div class="notification-desc"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
