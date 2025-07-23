@@ -39,18 +39,18 @@ git remote add origin https://github.com/[username]/bank-ting-ting.git
 ### 1.2 Cấu trúc thư mục
 ```
 bank-ting-ting/
-├── server/
-│   ├── index.js
-│   ├── package.json
-│   └── .env.example
-├── public/
-│   ├── index.html
-│   ├── app.js
-│   ├── style.css
-│   └── manifest.json
-├── .gitignore
-├── README.md
-└── Procfile
+├── index.js          ← DI CHUYỂN TỪ server/index.js
+├── package.json      ← ĐÃ ĐÚNG VỊ TRÍ
+├── Procfile          ← ĐÃ ĐÚNG VỊ TRÍ  
+├── .env              ← ĐÃ ĐÚNG VỊ TRÍ
+├── .env.example      ← DI CHUYỂN TỪ server/
+├── .gitignore        ← ĐÃ ĐÚNG VỊ TRÍ
+├── README.md         ← ĐÃ ĐÚNG VỊ TRÍ
+└── public/           ← GIỮ NGUYÊN
+    ├── app.js
+    ├── index.html
+    ├── manifest.json
+    └── style.css
 ```
 
 ## 🔧 BƯỚC 2: TẠO BACKEND SERVER (NODE.JS)
