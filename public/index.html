@@ -11,6 +11,71 @@
     
     <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="style.css">
+    <style>
+        /* Voice Settings Styles */
+        .voice-settings {
+            background: #f8f9fa;
+            margin: 20px;
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #e9ecef;
+        }
+
+        .voice-settings h3 {
+            margin: 0 0 15px 0;
+            color: #495057;
+            font-size: 16px;
+        }
+
+        .setting-group {
+            margin-bottom: 15px;
+        }
+
+        .setting-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #495057;
+        }
+
+        .voice-selector {
+            width: 100%;
+            padding: 10px 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 14px;
+            background: white;
+            color: #495057;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .voice-selector:focus {
+            outline: none;
+            border-color: #2196F3;
+            box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.1);
+        }
+
+        .btn-test {
+            background: #28a745;
+            color: white;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .btn-test:hover {
+            background: #218838;
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 480px) {
+            .voice-settings {
+                margin: 15px;
+                padding: 15px;
+            }
+        }
+    </style>
     <link rel="icon" type="image/png" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔔</text></svg>">
 </head>
 <body>
@@ -27,6 +92,42 @@
             <button id="toggleSound" class="btn btn-primary">🔊 Bật âm thanh</button>
             <button id="testNotification" class="btn btn-secondary">🧪 Test thông báo</button>
             <button id="toggleTTS" class="btn btn-primary">🗣️ Bật đọc giọng nói</button>
+        </div>
+
+        <!-- Voice Settings Section -->
+        <div class="voice-settings">
+            <h3>⚙️ Cài đặt giọng nói</h3>
+            
+            <div class="setting-group">
+                <label for="voiceSelect">🎭 Chọn giọng đọc:</label>
+                <select id="voiceSelect" class="voice-selector">
+                    <option value="auto">🔄 Tự động (Giọng Việt tốt nhất)</option>
+                    <option value="default">🤖 Giọng mặc định hệ thống</option>
+                </select>
+            </div>
+
+            <div class="setting-group">
+                <label for="voiceSpeed">⚡ Tốc độ đọc:</label>
+                <select id="voiceSpeed" class="voice-selector">
+                    <option value="0.6">🐌 Rất chậm</option>
+                    <option value="0.8" selected>🚶 Chậm</option>
+                    <option value="1.0">🏃 Bình thường</option>
+                    <option value="1.2">🏃‍♀️ Nhanh</option>
+                    <option value="1.4">⚡ Rất nhanh</option>
+                </select>
+            </div>
+
+            <div class="setting-group">
+                <label for="voicePitch">🎵 Cao độ giọng:</label>
+                <select id="voicePitch" class="voice-selector">
+                    <option value="0.8">🔉 Trầm</option>
+                    <option value="1.0" selected>🔊 Bình thường</option>
+                    <option value="1.2">🔊 Cao</option>
+                    <option value="1.4">🎵 Rất cao</option>
+                </select>
+            </div>
+
+            <button id="testVoice" class="btn btn-test">🎤 Test giọng đọc</button>
         </div>
 
         <div class="stats">

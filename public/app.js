@@ -7,27 +7,33 @@ class BankTingTing {
         this.transactions = [];
         this.totalAmount = 0;
         
+        // Voice settings
+        this.voices = [];
+        this.selectedVoice = 'auto';
+        this.voiceSpeed = 0.8;
+        this.voicePitch = 1.0;
+        
         // Từ điển phát âm ngân hàng
         this.bankPronunciations = {
             'VCB': 'việt com băng',
             'Vietcombank': 'việt com băng', 
             'VIETCOMBANK': 'việt com băng',
-            'TCB': 'tếch com băng',
+            'TCB': 'tê chê băng',
             'Techcombank': 'tếch com băng',
             'TECHCOMBANK': 'tếch com băng',
             'MB': 'mờ bê băng',
             'MBBANK': 'mờ bê băng',
             'MBBank': 'mờ bê băng',
-            'ACB': 'ACB',
-            'VTB': 'việt tin băng',
-            'VietinBank': 'việt tin băng',
-            'VIETINBANK': 'việt tin băng',
+            'ACB': 'á chê băng',
+            'VTB': 'việt tín băng',
+            'VietinBank': 'việt tín băng',
+            'VIETINBANK': 'việt tín băng',
             'VPBank': 'vê pê băng',
             'VPBANK': 'vê pê băng',
             'BIDV': 'bê i đê vê',
             'SHB': 'ét ách bê',
-            'Sacombank': 'sa com băng',
-            'SACOMBANK': 'sa com băng',
+            'Sacombank': 'sá com băng',
+            'SACOMBANK': 'sá com băng',
             'HDBank': 'ách đê băng',
             'HDBANK': 'ách đê băng',
             'TPBank': 'tê pê băng',
@@ -53,6 +59,7 @@ class BankTingTing {
     init() {
         this.connectSocket();
         this.setupEventListeners();
+        this.loadVoices();
         this.requestNotificationPermission();
         this.preventSleep();
     }
@@ -95,6 +102,27 @@ class BankTingTing {
             this.sendTestNotification();
         });
         
+        // Voice settings
+        document.getElementById('voiceSelect').addEventListener('change', (e) => {
+            this.selectedVoice = e.target.value;
+            console.log('🎭 Đã chọn giọng:', this.selectedVoice);
+        });
+        
+        document.getElementById('voiceSpeed').addEventListener('change', (e) => {
+            this.voiceSpeed = parseFloat(e.target.value);
+            console.log('⚡ Tốc độ đọc:', this.voiceSpeed);
+        });
+        
+        document.getElementById('voicePitch').addEventListener('change', (e) => {
+            this.voicePitch = parseFloat(e.target.value);
+            console.log('🎵 Cao độ giọng:', this.voicePitch);
+        });
+        
+        // Test voice
+        document.getElementById('testVoice').addEventListener('click', () => {
+            this.testVoice();
+        });
+        
         // Prevent app from sleeping
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
@@ -103,6 +131,114 @@ class BankTingTing {
                 console.log('📱 App trở lại foreground');
             }
         });
+    }
+    
+    loadVoices() {
+        if (!window.speechSynthesis) {
+            console.log('❌ Trình duyệt không hỗ trợ text-to-speech');
+            return;
+        }
+        
+        const loadVoicesFunction = () => {
+            this.voices = window.speechSynthesis.getVoices();
+            this.populateVoiceSelector();
+            console.log('🗣️ Đã tải', this.voices.length, 'giọng nói');
+        };
+        
+        // Load voices
+        loadVoicesFunction();
+        
+        // Some browsers load voices asynchronously
+        window.speechSynthesis.onvoiceschanged = loadVoicesFunction;
+    }
+    
+    populateVoiceSelector() {
+        const selector = document.getElementById('voiceSelect');
+        
+        // Clear existing options except default ones
+        const defaultOptions = selector.querySelectorAll('option[value="auto"], option[value="default"]');
+        selector.innerHTML = '';
+        defaultOptions.forEach(option => selector.appendChild(option));
+        
+        // Find Vietnamese voices
+        const vietnameseVoices = this.voices.filter(voice => 
+            voice.lang.includes('vi') || 
+            voice.name.toLowerCase().includes('vietnam') ||
+            voice.name.toLowerCase().includes('vietnamese') ||
+            voice.name.toLowerCase().includes('vi-vn')
+        );
+        
+        // Add Vietnamese voices
+        vietnameseVoices.forEach((voice, index) => {
+            const option = document.createElement('option');
+            option.value = voice.name;
+            option.textContent = `🇻🇳 ${voice.name} (${voice.lang})`;
+            selector.appendChild(option);
+        });
+        
+        // Add other quality voices that might work well
+        const otherGoodVoices = this.voices.filter(voice => 
+            !voice.lang.includes('vi') && (
+                voice.lang.includes('en') || 
+                voice.name.toLowerCase().includes('google') ||
+                voice.name.toLowerCase().includes('apple') ||
+                voice.name.toLowerCase().includes('microsoft')
+            )
+        );
+        
+        if (otherGoodVoices.length > 0) {
+            const separator = document.createElement('option');
+            separator.disabled = true;
+            separator.textContent = '────── Giọng khác ──────';
+            selector.appendChild(separator);
+            
+            otherGoodVoices.slice(0, 10).forEach(voice => {
+                const option = document.createElement('option');
+                option.value = voice.name;
+                option.textContent = `🌐 ${voice.name} (${voice.lang})`;
+                selector.appendChild(option);
+            });
+        }
+        
+        console.log('🗣️ Tìm thấy', vietnameseVoices.length, 'giọng tiếng Việt');
+    }
+    
+    getSelectedVoice() {
+        if (this.selectedVoice === 'auto') {
+            // Tự động chọn giọng Việt tốt nhất
+            const vietnameseVoices = this.voices.filter(voice => 
+                voice.lang.includes('vi') || 
+                voice.name.toLowerCase().includes('vietnam') ||
+                voice.name.toLowerCase().includes('vietnamese')
+            );
+            
+            if (vietnameseVoices.length > 0) {
+                // Ưu tiên Google, Apple, Microsoft voices
+                const premiumVoice = vietnameseVoices.find(voice => 
+                    voice.name.toLowerCase().includes('google') ||
+                    voice.name.toLowerCase().includes('apple') ||
+                    voice.name.toLowerCase().includes('microsoft')
+                );
+                
+                return premiumVoice || vietnameseVoices[0];
+            }
+            
+            return null;
+        } else if (this.selectedVoice === 'default') {
+            return null;
+        } else {
+            return this.voices.find(voice => voice.name === this.selectedVoice);
+        }
+    }
+    
+    testVoice() {
+        const testData = {
+            amount: 500000,
+            bank_brand: 'MBBANK',
+            content: 'Test giọng đọc'
+        };
+        
+        this.speakCustomNotification(testData);
     }
     
     handleNewTransaction(data) {
@@ -272,25 +408,19 @@ class BankTingTing {
         
         const utterance = new SpeechSynthesisUtterance(customText);
         
-        // Cấu hình giọng nói
+        // Cấu hình giọng nói với settings từ user
         utterance.lang = 'vi-VN';
-        utterance.rate = 0.8;  // Chậm hơn một chút để rõ ràng
-        utterance.pitch = 1.1; // Cao hơn một chút
+        utterance.rate = this.voiceSpeed;
+        utterance.pitch = this.voicePitch;
         utterance.volume = 0.9;
         
-        // Thử tìm giọng tiếng Việt
-        const voices = window.speechSynthesis.getVoices();
-        const vietnameseVoice = voices.find(voice => 
-            voice.lang.includes('vi') || 
-            voice.name.toLowerCase().includes('vietnam') ||
-            voice.name.toLowerCase().includes('vietnamese')
-        );
-        
-        if (vietnameseVoice) {
-            utterance.voice = vietnameseVoice;
-            console.log('✅ Sử dụng giọng tiếng Việt:', vietnameseVoice.name);
+        // Sử dụng giọng đã chọn
+        const selectedVoice = this.getSelectedVoice();
+        if (selectedVoice) {
+            utterance.voice = selectedVoice;
+            console.log('✅ Sử dụng giọng:', selectedVoice.name);
         } else {
-            console.log('⚠️ Không tìm thấy giọng tiếng Việt, sử dụng giọng mặc định');
+            console.log('⚠️ Sử dụng giọng mặc định');
         }
         
         // Xử lý lỗi
@@ -404,14 +534,6 @@ class BankTingTing {
 // Khởi tạo ứng dụng khi DOM đã sẵn sàng
 document.addEventListener('DOMContentLoaded', () => {
     window.bankTingTing = new BankTingTing();
-    
-    // Load voices khi có sẵn
-    if (window.speechSynthesis) {
-        window.speechSynthesis.onvoiceschanged = () => {
-            const voices = window.speechSynthesis.getVoices();
-            console.log('🗣️ Danh sách giọng nói có sẵn:', voices.map(v => `${v.name} (${v.lang})`));
-        };
-    }
 });
 
 // Service Worker cho PWA
