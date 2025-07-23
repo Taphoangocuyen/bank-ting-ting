@@ -7,6 +7,46 @@ class BankTingTing {
         this.transactions = [];
         this.totalAmount = 0;
         
+        // Từ điển phát âm ngân hàng
+        this.bankPronunciations = {
+            'VCB': 'việt com băng',
+            'Vietcombank': 'việt com băng', 
+            'VIETCOMBANK': 'việt com băng',
+            'TCB': 'tếch com băng',
+            'Techcombank': 'tếch com băng',
+            'TECHCOMBANK': 'tếch com băng',
+            'MB': 'mờ bê băng',
+            'MBBANK': 'mờ bê băng',
+            'MBBank': 'mờ bê băng',
+            'ACB': 'ACB',
+            'VTB': 'việt tin băng',
+            'VietinBank': 'việt tin băng',
+            'VIETINBANK': 'việt tin băng',
+            'VPBank': 'vê pê băng',
+            'VPBANK': 'vê pê băng',
+            'BIDV': 'bê i đê vê',
+            'SHB': 'ét ách bê',
+            'Sacombank': 'sa com băng',
+            'SACOMBANK': 'sa com băng',
+            'HDBank': 'ách đê băng',
+            'HDBANK': 'ách đê băng',
+            'TPBank': 'tê pê băng',
+            'TPBANK': 'tê pê băng',
+            'Eximbank': 'ếch xim băng',
+            'EXIMBANK': 'ếch xim băng',
+            'OCB': 'ô chê băng',
+            'MSB': 'ếm ét bê',
+            'SeABank': 'sí ây băng',
+            'SEABANK': 'sí ây băng',
+            'LienVietPostBank': 'liên việt pót băng',
+            'LIENVIETPOSTBANK': 'liên việt pót băng',
+            'Agribank': 'a gơ ri băng',
+            'AGRIBANK': 'a gơ ri băng',
+            'VIB': 'vê i băng',
+            'PVcomBank': 'pê vê com băng',
+            'PVCOMBANK': 'pê vê com băng'
+        };
+        
         this.init();
     }
     
@@ -91,9 +131,9 @@ class BankTingTing {
             this.playNotificationSound();
         }
         
-        // Text-to-speech
+        // Text-to-speech với âm thanh tùy chỉnh
         if (this.ttsEnabled) {
-            this.speakNotification(data);
+            this.speakCustomNotification(data);
         }
         
         // Show system notification
@@ -141,7 +181,7 @@ class BankTingTing {
                     ${transaction.content}
                 </div>
                 <div class="transaction-details">
-                    ${transaction.bank_brand} • ${transaction.account_number}
+                    ${this.getBankDisplayName(transaction.bank_brand)} • ${transaction.account_number}
                 </div>
             </div>
         `).join('');
@@ -168,36 +208,101 @@ class BankTingTing {
     }
     
     playNotificationSound() {
-        // Tạo âm thanh thông báo
+        // Tạo âm thanh "TING TING" đặc trưng
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
         
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
+        // Âm đầu tiên - TING
+        const oscillator1 = audioContext.createOscillator();
+        const gainNode1 = audioContext.createGain();
+        oscillator1.connect(gainNode1);
+        gainNode1.connect(audioContext.destination);
         
-        oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
-        oscillator.frequency.setValueAtTime(600, audioContext.currentTime + 0.1);
-        oscillator.frequency.setValueAtTime(800, audioContext.currentTime + 0.2);
+        oscillator1.frequency.setValueAtTime(800, audioContext.currentTime);
+        gainNode1.gain.setValueAtTime(0.3, audioContext.currentTime);
+        gainNode1.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
         
-        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
+        oscillator1.start(audioContext.currentTime);
+        oscillator1.stop(audioContext.currentTime + 0.2);
         
-        oscillator.start(audioContext.currentTime);
-        oscillator.stop(audioContext.currentTime + 0.3);
+        // Âm thứ hai - TING (sau 0.1 giây)
+        setTimeout(() => {
+            const oscillator2 = audioContext.createOscillator();
+            const gainNode2 = audioContext.createGain();
+            oscillator2.connect(gainNode2);
+            gainNode2.connect(audioContext.destination);
+            
+            oscillator2.frequency.setValueAtTime(900, audioContext.currentTime);
+            gainNode2.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gainNode2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+            
+            oscillator2.start(audioContext.currentTime);
+            oscillator2.stop(audioContext.currentTime + 0.2);
+        }, 100);
     }
     
-    speakNotification(data) {
-        if (!window.speechSynthesis) return;
+    // Hàm lấy tên phát âm ngân hàng
+    getBankPronunciation(bankCode) {
+        const pronunciation = this.bankPronunciations[bankCode] || 
+                            this.bankPronunciations[bankCode?.toUpperCase()] ||
+                            bankCode?.toLowerCase().replace(/bank/gi, 'băng') || 
+                            'ngân hàng';
+        return pronunciation;
+    }
+    
+    // Hàm lấy tên hiển thị ngân hàng
+    getBankDisplayName(bankCode) {
+        return bankCode || 'Unknown';
+    }
+    
+    // Hàm phát âm tùy chỉnh
+    speakCustomNotification(data) {
+        if (!window.speechSynthesis) {
+            console.log('❌ Trình duyệt không hỗ trợ text-to-speech');
+            return;
+        }
         
-        const text = `Nhận được ${this.formatMoney(data.amount)} đồng. ${data.content}`;
-        const utterance = new SpeechSynthesisUtterance(text);
+        // Tạo câu phát âm tùy chỉnh
+        const bankName = this.getBankPronunciation(data.bank_brand);
+        const amount = this.formatMoney(data.amount);
         
+        // Câu phát âm: "Việt tin băng nhận được [số tiền] đồng, Cám ơn quý Khách"
+        const customText = `${bankName} nhận được ${amount} đồng. Cám ơn quý Khách.`;
+        
+        console.log('🗣️ Phát âm:', customText);
+        
+        const utterance = new SpeechSynthesisUtterance(customText);
+        
+        // Cấu hình giọng nói
         utterance.lang = 'vi-VN';
-        utterance.rate = 0.9;
-        utterance.pitch = 1;
-        utterance.volume = 0.8;
+        utterance.rate = 0.8;  // Chậm hơn một chút để rõ ràng
+        utterance.pitch = 1.1; // Cao hơn một chút
+        utterance.volume = 0.9;
         
+        // Thử tìm giọng tiếng Việt
+        const voices = window.speechSynthesis.getVoices();
+        const vietnameseVoice = voices.find(voice => 
+            voice.lang.includes('vi') || 
+            voice.name.toLowerCase().includes('vietnam') ||
+            voice.name.toLowerCase().includes('vietnamese')
+        );
+        
+        if (vietnameseVoice) {
+            utterance.voice = vietnameseVoice;
+            console.log('✅ Sử dụng giọng tiếng Việt:', vietnameseVoice.name);
+        } else {
+            console.log('⚠️ Không tìm thấy giọng tiếng Việt, sử dụng giọng mặc định');
+        }
+        
+        // Xử lý lỗi
+        utterance.onerror = (event) => {
+            console.error('❌ Lỗi text-to-speech:', event.error);
+        };
+        
+        utterance.onend = () => {
+            console.log('✅ Hoàn thành phát âm');
+        };
+        
+        // Phát âm
         window.speechSynthesis.speak(utterance);
     }
     
@@ -212,8 +317,10 @@ class BankTingTing {
     showSystemNotification(data) {
         if (!('Notification' in window) || Notification.permission !== 'granted') return;
         
+        const bankName = this.getBankDisplayName(data.bank_brand);
+        
         const notification = new Notification('BANK-TING-TING 🔔', {
-            body: `+${this.formatMoney(data.amount)} - ${data.content}`,
+            body: `${bankName} nhận được +${this.formatMoney(data.amount)}đ\n${data.content}`,
             icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">💰</text></svg>',
             badge: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🔔</text></svg>',
             tag: 'bank-transaction',
@@ -226,7 +333,7 @@ class BankTingTing {
             notification.close();
         };
         
-        setTimeout(() => notification.close(), 5000);
+        setTimeout(() => notification.close(), 8000);
     }
     
     updateSoundButton() {
@@ -272,7 +379,7 @@ class BankTingTing {
             });
         }
         
-        // Fallback: tạo audio im lặng
+        // Fallback: tạo audio im lặng để giữ app hoạt động
         setInterval(() => {
             if (document.hidden) {
                 const audio = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=');
@@ -297,6 +404,14 @@ class BankTingTing {
 // Khởi tạo ứng dụng khi DOM đã sẵn sàng
 document.addEventListener('DOMContentLoaded', () => {
     window.bankTingTing = new BankTingTing();
+    
+    // Load voices khi có sẵn
+    if (window.speechSynthesis) {
+        window.speechSynthesis.onvoiceschanged = () => {
+            const voices = window.speechSynthesis.getVoices();
+            console.log('🗣️ Danh sách giọng nói có sẵn:', voices.map(v => `${v.name} (${v.lang})`));
+        };
+    }
 });
 
 // Service Worker cho PWA
