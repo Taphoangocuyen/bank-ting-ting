@@ -16,7 +16,7 @@ class BankTingTing {
         // Voice settings
         this.voices = [];
         this.selectedVoice = 'auto';
-        this.voiceSpeed = 0.8;
+        this.voiceSpeed = 1.1;
         this.voicePitch = 1.0;
         
         // Từ điển phát âm ngân hàng
