@@ -9,244 +9,186 @@ require('dotenv').config();
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  },
-  // Thêm config để tránh timeout
-  pingTimeout: 60000,
-  pingInterval: 25000
+  cors: { origin: "*", methods: ["GET", "POST"] },
+  pingTimeout: 30000,
+  pingInterval: 10000,
+  transports: ['websocket', 'polling']
 });
 
 const PORT = process.env.PORT || 3000;
-
-// Middleware
-app.use(cors());
-app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Biến lưu trữ kết nối và trạng thái
 let connectedClients = [];
 let isShuttingDown = false;
 
-// Socket.IO connection
+// Middleware - minimal
+app.use(cors());
+app.use(bodyParser.json({ limit: '1mb' }));
+app.use(express.static(path.join(__dirname, 'public'), {
+  maxAge: '1d',
+  etag: false
+}));
+
+// Socket.IO - optimized
 io.on('connection', (socket) => {
   if (isShuttingDown) {
     socket.disconnect(true);
     return;
   }
   
-  console.log('🔗 Thiết bị kết nối:', socket.id);
+  console.log('🔗 Client:', socket.id);
   connectedClients.push(socket);
   
   socket.on('disconnect', () => {
-    console.log('❌ Thiết bị ngắt kết nối:', socket.id);
-    connectedClients = connectedClients.filter(client => client.id !== socket.id);
+    connectedClients = connectedClients.filter(c => c.id !== socket.id);
   });
   
-  // Cleanup khi có lỗi
-  socket.on('error', (error) => {
-    console.error('❌ Socket error:', error);
-    connectedClients = connectedClients.filter(client => client.id !== socket.id);
+  socket.on('error', () => {
+    connectedClients = connectedClients.filter(c => c.id !== socket.id);
   });
 });
 
-// Root route
+// Routes - streamlined
 app.get('/', (req, res) => {
-  if (isShuttingDown) {
-    return res.status(503).send('Service Unavailable - Shutting Down');
-  }
+  if (isShuttingDown) return res.status(503).end();
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Endpoint nhận webhook từ Sepay
 app.post('/webhook/sepay', (req, res) => {
-  if (isShuttingDown) {
-    return res.status(503).send('Service Unavailable');
-  }
+  if (isShuttingDown) return res.status(503).end();
   
   try {
-    const transactionData = req.body;
-    console.log('📨 Webhook received:', transactionData);
-    
-    // Xử lý dữ liệu giao dịch
+    const data = req.body;
     const notification = {
       id: Date.now(),
       timestamp: new Date().toISOString(),
-      amount: Math.abs(transactionData.amount || transactionData.transferAmount || 0),
-      content: transactionData.content || transactionData.description || 'Giao dịch',
-      account_number: transactionData.account_number || transactionData.accountNumber || '',
-      transaction_id: transactionData.transaction_id || transactionData.transactionId || '',
-      bank_brand: transactionData.bank_brand || transactionData.gateway || 'Unknown',
-      type: (transactionData.amount || 0) > 0 ? 'credit' : 'debit'
+      amount: Math.abs(data.amount || data.transferAmount || 0),
+      content: data.content || data.description || 'Giao dịch',
+      account_number: data.account_number || data.accountNumber || '',
+      transaction_id: data.transaction_id || data.transactionId || '',
+      bank_brand: data.bank_brand || data.gateway || 'Unknown',
+      type: (data.amount || 0) > 0 ? 'credit' : 'debit'
     };
     
-    // Gửi thông báo real-time đến tất cả client (với error handling)
-    let successCount = 0;
-    connectedClients.forEach(client => {
+    // Broadcast efficiently
+    const activeClients = connectedClients.filter(c => c.connected);
+    activeClients.forEach(client => {
       try {
-        if (client.connected) {
-          client.emit('new_transaction', notification);
-          successCount++;
-        }
-      } catch (error) {
-        console.error('❌ Error sending to client:', error);
-      }
+        client.emit('new_transaction', notification);
+      } catch (e) {}
     });
     
-    console.log(`💰 Giao dịch mới gửi đến ${successCount}/${connectedClients.length} thiết bị`);
-    res.status(200).json({ success: true, sent_to: successCount });
+    console.log(`💰 Sent to ${activeClients.length} devices`);
+    res.status(200).json({ success: true, sent: activeClients.length });
     
   } catch (error) {
-    console.error('❌ Lỗi xử lý webhook:', error);
-    res.status(500).json({ error: 'Server Error', details: error.message });
+    console.error('❌ Webhook error:', error.message);
+    res.status(500).json({ error: 'Server Error' });
   }
 });
 
-// Endpoint test thông báo
 app.post('/test-notification', (req, res) => {
-  if (isShuttingDown) {
-    return res.status(503).send('Service Unavailable');
-  }
+  if (isShuttingDown) return res.status(503).end();
   
-  try {
-    const testNotification = {
-      id: Date.now(),
-      timestamp: new Date().toISOString(),
-      amount: Math.floor(Math.random() * 1000000) + 100000,
-      content: 'Test notification - Nhận tiền test từ Heroku',
-      account_number: '1234567890',
-      transaction_id: 'TEST_' + Date.now(),
-      bank_brand: ['VCB', 'TCB', 'MBBANK', 'ACB'][Math.floor(Math.random() * 4)],
-      type: 'credit'
-    };
-    
-    let successCount = 0;
-    connectedClients.forEach(client => {
-      try {
-        if (client.connected) {
-          client.emit('new_transaction', testNotification);
-          successCount++;
-        }
-      } catch (error) {
-        console.error('❌ Error sending test:', error);
-      }
-    });
-    
-    console.log(`🧪 Test notification gửi đến ${successCount} thiết bị`);
-    res.json({ 
-      success: true, 
-      message: 'Test notification sent successfully!',
-      data: testNotification,
-      sent_to: successCount
-    });
-    
-  } catch (error) {
-    console.error('❌ Lỗi test notification:', error);
-    res.status(500).json({ error: 'Test failed', details: error.message });
-  }
+  const testData = {
+    id: Date.now(),
+    timestamp: new Date().toISOString(),
+    amount: Math.floor(Math.random() * 500000) + 100000,
+    content: 'Test từ Heroku - ' + new Date().toLocaleTimeString('vi-VN'),
+    account_number: '1234567890',
+    transaction_id: 'TEST_' + Date.now(),
+    bank_brand: ['VCB', 'TCB', 'MBBANK'][Math.floor(Math.random() * 3)],
+    type: 'credit'
+  };
+  
+  const activeClients = connectedClients.filter(c => c.connected);
+  activeClients.forEach(client => {
+    try {
+      client.emit('new_transaction', testData);
+    } catch (e) {}
+  });
+  
+  console.log(`🧪 Test sent to ${activeClients.length} devices`);
+  res.json({ success: true, data: testData, sent: activeClients.length });
 });
 
-// Endpoint health check
 app.get('/health', (req, res) => {
   res.json({ 
-    status: isShuttingDown ? 'SHUTTING_DOWN' : 'OK', 
-    timestamp: new Date().toISOString(),
-    connected_clients: connectedClients.length,
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    version: '1.0.2-fixed'
+    status: isShuttingDown ? 'SHUTTING_DOWN' : 'OK',
+    clients: connectedClients.length,
+    uptime: Math.floor(process.uptime()),
+    memory: Math.floor(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB'
   });
 });
 
-// Error handling middleware
-app.use((error, req, res, next) => {
-  console.error('❌ Express Error:', error);
-  res.status(500).json({ error: 'Internal Server Error' });
-});
-
-// 404 handler
-app.use((req, res) => {
-  res.status(404).sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-// FIXED: Proper graceful shutdown
-const gracefulShutdown = (signal) => {
-  console.log(`📴 ${signal} received, shutting down gracefully...`);
+// ULTRA-FAST shutdown handler
+const shutdown = (signal) => {
+  if (isShuttingDown) return;
   isShuttingDown = true;
   
-  // Set timeout to force exit if graceful shutdown takes too long
-  const forceExitTimer = setTimeout(() => {
-    console.log('⚡ Force exit - graceful shutdown timeout');
-    process.exit(1);
-  }, 25000); // 25 seconds, less than Heroku's 30s timeout
+  console.log(`📴 ${signal} - Fast shutdown starting...`);
   
-  // Close new connections
-  server.close((err) => {
-    if (err) {
-      console.error('❌ Error closing server:', err);
-      clearTimeout(forceExitTimer);
-      process.exit(1);
-    }
+  // Force exit in 20 seconds (well before Heroku's 30s limit)
+  const forceTimer = setTimeout(() => {
+    console.log('⚡ FORCE EXIT');
+    process.exit(0);
+  }, 20000);
+  
+  // Disconnect all clients immediately
+  connectedClients.forEach(client => {
+    try { client.disconnect(true); } catch (e) {}
+  });
+  connectedClients = [];
+  
+  // Close server immediately
+  server.close(() => {
+    console.log('✅ Server closed');
+    clearTimeout(forceTimer);
     
-    console.log('✅ HTTP server closed');
+    // Close Socket.IO with timeout
+    const ioTimer = setTimeout(() => {
+      console.log('⚡ IO timeout - force exit');
+      process.exit(0);
+    }, 5000);
     
-    // Close Socket.IO
-    io.close((err) => {
-      if (err) {
-        console.error('❌ Error closing Socket.IO:', err);
-      } else {
-        console.log('✅ Socket.IO closed');
-      }
-      
-      // Clear all timers/intervals
-      clearTimeout(forceExitTimer);
-      
-      console.log('✅ Graceful shutdown completed');
+    io.close(() => {
+      console.log('✅ Socket.IO closed');
+      clearTimeout(ioTimer);
+      console.log('✅ Clean shutdown complete');
       process.exit(0);
     });
   });
   
-  // Disconnect all clients immediately
-  connectedClients.forEach(client => {
-    try {
-      client.disconnect(true);
-    } catch (error) {
-      // Ignore errors during shutdown
-    }
-  });
-  connectedClients = [];
+  // If server.close() doesn't trigger callback within 10s
+  setTimeout(() => {
+    console.log('⚡ Server close timeout - force exit');
+    clearTimeout(forceTimer);
+    process.exit(0);
+  }, 10000);
 };
 
-// Handle shutdown signals from Heroku
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+// Handle all shutdown signals
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
-// Handle uncaught exceptions
+// Handle errors with immediate shutdown
 process.on('uncaughtException', (err) => {
-  console.error('❌ Uncaught Exception:', err);
-  gracefulShutdown('UNCAUGHT_EXCEPTION');
+  console.error('❌ Uncaught:', err.message);
+  shutdown('UNCAUGHT');
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-  gracefulShutdown('UNHANDLED_REJECTION');
+process.on('unhandledRejection', (reason) => {
+  console.error('❌ Unhandled:', reason);
+  shutdown('UNHANDLED');
 });
 
 // Start server
 server.listen(PORT, () => {
-  console.log('🚀 ===============================================');
-  console.log('🏦 BANK-TING-TING Server Started Successfully!');
-  console.log('🚀 ===============================================');
+  console.log('🚀 =====================================');
+  console.log('🏦 BANK-TING-TING v2.0 - ULTRA OPTIMIZED');
   console.log(`📡 Port: ${PORT}`);
   console.log(`📱 URL: https://bank-ting-ting-771db69fc368.herokuapp.com`);
-  console.log(`💚 Health: /health`);
-  console.log(`🧪 Test: POST /test-notification`);
-  console.log(`📊 Webhook: POST /webhook/sepay`);
-  console.log('🚀 ===============================================');
-  console.log('🎯 Ready for transactions! TING TING! 🔔');
-  console.log('🚀 ===============================================');
+  console.log('🎯 Ready! TING TING! 🔔');
+  console.log('🚀 =====================================');
 });
 
-// Keep process alive (but allow shutdown)
+// Keep alive
 process.stdin.resume();
