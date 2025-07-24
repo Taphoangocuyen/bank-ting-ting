@@ -149,8 +149,12 @@ const shutdown = (signal) => {
       process.exit(0);
     }, 5000);
     
-    io.close(() => {
-      console.log('✅ Socket.IO closed');
+    io.close((err) => {
+      if (err && err.code !== 'ERR_SERVER_NOT_RUNNING') {
+        console.log('⚠️ Socket.IO close warning:', err.code);
+      } else {
+        console.log('✅ Socket.IO closed');
+      }
       clearTimeout(ioTimer);
       console.log('✅ Clean shutdown complete');
       process.exit(0);
