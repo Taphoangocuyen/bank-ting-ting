@@ -8,7 +8,8 @@ class BankTingTing {
         this.totalAmount = 0;
         this.wakeLock = null;
         
-        // Simple duplicate prevention
+        // Mode switching
+        this.currentMode = 'foreground'; // 'foreground' or 'background'
         this.lastTransactionId = '';
         this.lastTransactionTime = 0;
         
@@ -18,11 +19,8 @@ class BankTingTing {
         this.voiceSpeed = 0.8;
         this.voicePitch = 1.0;
         
-        // Background mode
-        this.isInBackground = false;
+        // Background settings
         this.backgroundInterval = null;
-        
-        // TTS state
         this.isSpeaking = false;
         
         // Từ điển phát âm ngân hàng
@@ -75,78 +73,114 @@ class BankTingTing {
         this.requestNotificationPermission();
         this.setupServiceWorker();
         this.preventSleep();
-        this.setupBackgroundMode();
+        this.setupModeSwitch();
     }
     
-    async setupServiceWorker() {
-        if ('serviceWorker' in navigator) {
-            try {
-                const registration = await navigator.serviceWorker.register('/sw.js');
-                console.log('✅ Service Worker registered');
-                
-                // Kiểm tra navigator.serviceWorker.controller trước khi listen
-                if (navigator.serviceWorker.controller) {
-                    navigator.serviceWorker.addEventListener('message', (event) => {
-                        this.handleServiceWorkerMessage(event.data);
-                    });
-                }
-                
-            } catch (error) {
-                console.error('❌ Service Worker registration failed:', error);
-            }
-        }
-    }
-    
-    handleServiceWorkerMessage(message) {
-        console.log('📨 SW Message received:', message);
-        
-        if (message.type === 'PLAY_SOUND' && message.data) {
-            // FIX 1: CHỈ CHẠY TTS KHI Ở BACKGROUND
-            if (document.hidden === true) {
-                console.log('🗣️ Running TTS from Service Worker (background mode)');
-                
-                // Play sound
-                this.playNotificationSound();
-                
-                // TTS for background
-                if (this.ttsEnabled) {
-                    this.forceTTS(message.data, (success) => {
-                        console.log('🗣️ Background TTS result:', success);
-                    });
-                }
-            } else {
-                console.log('🚫 SW message ignored - tab is visible (foreground mode)');
-            }
-        }
-    }
-    
-    setupBackgroundMode() {
-        // Simple background detection
+    setupModeSwitch() {
+        // Mode switching based on visibility
         document.addEventListener('visibilitychange', () => {
-            this.isInBackground = document.hidden;
+            const isHidden = document.hidden;
             
-            if (this.isInBackground) {
-                console.log('📱 App in background - Starting background mode');
-                this.startBackgroundCheck();
-                this.keepAudioContextAlive();
+            if (isHidden) {
+                this.switchToBackgroundMode();
             } else {
-                console.log('📱 App in foreground - Stopping background mode');
-                this.stopBackgroundCheck();
+                this.switchToForegroundMode();
             }
         });
         
-        // Keep app alive in background
-        this.keepAudioContextAlive();
+        // Initial mode
+        this.switchToForegroundMode();
         
-        console.log('🌙 Background mode setup complete');
+        console.log('🔄 Mode switching setup complete');
+    }
+    
+    switchToForegroundMode() {
+        this.currentMode = 'foreground';
+        console.log('📱 FOREGROUND MODE: Socket real-time enabled, SW disabled');
+        
+        // Stop background polling
+        if (this.backgroundInterval) {
+            clearInterval(this.backgroundInterval);
+            this.backgroundInterval = null;
+        }
+    }
+    
+    switchToBackgroundMode() {
+        this.currentMode = 'background';
+        console.log('🌙 BACKGROUND MODE: Socket disabled, SW + polling enabled');
+        
+        // Start background polling as backup
+        this.startBackgroundPolling();
+        
+        // Keep audio context alive
+        this.keepAudioContextAlive();
+    }
+    
+    startBackgroundPolling() {
+        if (this.backgroundInterval) {
+            clearInterval(this.backgroundInterval);
+        }
+        
+        this.backgroundInterval = setInterval(() => {
+            this.checkForNewTransactions();
+        }, 15000); // Every 15 seconds
+    }
+    
+    async checkForNewTransactions() {
+        if (this.currentMode !== 'background') return;
+        
+        try {
+            const response = await fetch('/api/logs');
+            const data = await response.json();
+            
+            if (data.recent_transactions && data.recent_transactions.length > 0) {
+                const latest = data.recent_transactions[0];
+                const now = Date.now();
+                const transactionTime = new Date(latest.time).getTime();
+                const diffInSeconds = (now - transactionTime) / 1000;
+                
+                // Only process very recent transactions (20 seconds)
+                if (diffInSeconds < 20) {
+                    const transactionId = latest.transaction_id || latest.id || `${latest.bank}_${latest.amount}_${transactionTime}`;
+                    
+                    // Simple duplicate check
+                    if (transactionId !== this.lastTransactionId || (now - this.lastTransactionTime) > 10000) {
+                        this.lastTransactionId = transactionId;
+                        this.lastTransactionTime = now;
+                        
+                        console.log('🔔 Background polling detected transaction!');
+                        
+                        // Play sound
+                        this.playNotificationSound();
+                        
+                        // Try TTS with force approach
+                        if (this.ttsEnabled) {
+                            this.forceBackgroundTTS({
+                                amount: latest.amount,
+                                bank_brand: latest.bank,
+                                content: latest.content
+                            });
+                        }
+                        
+                        // System notification
+                        this.showSystemNotification({
+                            amount: latest.amount,
+                            bank_brand: latest.bank,
+                            content: latest.content
+                        });
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('❌ Background polling failed:', error);
+        }
     }
     
     keepAudioContextAlive() {
-        // Simple approach to keep app alive
+        // Keep app alive with minimal audio
         setInterval(() => {
-            if (this.isInBackground) {
+            if (this.currentMode === 'background') {
                 try {
-                    // Create minimal audio context to keep app active
                     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
                     const oscillator = audioContext.createOscillator();
                     const gainNode = audioContext.createGain();
@@ -167,96 +201,72 @@ class BankTingTing {
                     // Silently fail
                 }
             }
-        }, 25000); // Every 25 seconds
+        }, 30000); // Every 30 seconds
     }
     
-    startBackgroundCheck() {
-        if (this.backgroundInterval) {
-            clearInterval(this.backgroundInterval);
-        }
-        
-        this.backgroundInterval = setInterval(() => {
-            this.checkForNewTransactions();
-        }, 10000); // Every 10 seconds
-    }
-    
-    stopBackgroundCheck() {
-        if (this.backgroundInterval) {
-            clearInterval(this.backgroundInterval);
-            this.backgroundInterval = null;
-        }
-    }
-    
-    async checkForNewTransactions() {
-        if (!this.isInBackground) return;
-        
-        try {
-            const response = await fetch('/api/logs');
-            const data = await response.json();
-            
-            if (data.recent_transactions && data.recent_transactions.length > 0) {
-                const latest = data.recent_transactions[0];
-                const now = Date.now();
-                const transactionTime = new Date(latest.time).getTime();
-                const diffInSeconds = (now - transactionTime) / 1000;
+    async setupServiceWorker() {
+        if ('serviceWorker' in navigator) {
+            try {
+                const registration = await navigator.serviceWorker.register('/sw.js');
+                console.log('✅ Service Worker registered');
                 
-                // Only process very recent transactions (30 seconds)
-                if (diffInSeconds < 30) {
-                    const transactionId = latest.transaction_id || latest.id || `${latest.bank}_${latest.amount}_${transactionTime}`;
-                    
-                    // Simple duplicate check
-                    if (transactionId !== this.lastTransactionId || (now - this.lastTransactionTime) > 10000) {
-                        this.lastTransactionId = transactionId;
-                        this.lastTransactionTime = now;
-                        
-                        console.log('🔔 Background transaction detected!');
-                        
-                        // Play sound
-                        this.playNotificationSound();
-                        
-                        // Try TTS with multiple attempts
-                        if (this.ttsEnabled) {
-                            this.attemptTTS({
-                                amount: latest.amount,
-                                bank_brand: latest.bank,
-                                content: latest.content
-                            }, 0);
-                        }
-                        
-                        // System notification
-                        this.showSystemNotification({
-                            amount: latest.amount,
-                            bank_brand: latest.bank,
-                            content: latest.content
-                        });
-                    }
-                }
+                // Listen for messages from Service Worker
+                navigator.serviceWorker.addEventListener('message', (event) => {
+                    this.handleServiceWorkerMessage(event.data);
+                });
+                
+            } catch (error) {
+                console.error('❌ Service Worker registration failed:', error);
             }
-        } catch (error) {
-            console.error('❌ Background check failed:', error);
         }
     }
     
-    attemptTTS(data, attempt) {
-        if (attempt >= 5 || this.isSpeaking) return;
+    handleServiceWorkerMessage(message) {
+        console.log('📨 SW Message received:', message, 'Current mode:', this.currentMode);
         
-        const delays = [0, 500, 1000, 2000, 3000];
-        
-        setTimeout(() => {
-            this.forceTTS(data, (success) => {
-                if (!success && attempt < 4) {
-                    console.log(`🗣️ TTS attempt ${attempt + 1} failed, retrying...`);
-                    this.attemptTTS(data, attempt + 1);
-                } else if (success) {
-                    console.log('🗣️ TTS success in background!');
-                } else {
-                    console.log('🗣️ All TTS attempts failed');
+        if (message.type === 'PLAY_SOUND' && message.data) {
+            // CRITICAL: CHỈ XỬ LÝ KHI Ở BACKGROUND MODE
+            if (this.currentMode === 'background') {
+                console.log('🗣️ Processing SW message in background mode');
+                
+                // Play sound
+                this.playNotificationSound();
+                
+                // TTS for background
+                if (this.ttsEnabled) {
+                    this.forceBackgroundTTS(message.data);
                 }
-            });
-        }, delays[attempt]);
+            } else {
+                console.log('🚫 SW message ignored - currently in foreground mode');
+            }
+        }
     }
     
-    forceTTS(data, callback) {
+    forceBackgroundTTS(data) {
+        // Multiple aggressive attempts for background TTS
+        const attempts = [0, 500, 1000, 2000, 3000, 5000];
+        let attemptCount = 0;
+        
+        const tryTTS = () => {
+            if (attemptCount >= attempts.length || this.isSpeaking) return;
+            
+            setTimeout(() => {
+                this.executeTTS(data, (success) => {
+                    if (success) {
+                        console.log(`🗣️ Background TTS success on attempt ${attemptCount + 1}`);
+                    } else {
+                        console.log(`🗣️ Background TTS attempt ${attemptCount + 1} failed`);
+                        attemptCount++;
+                        tryTTS(); // Try next attempt
+                    }
+                });
+            }, attempts[attemptCount]);
+        };
+        
+        tryTTS();
+    }
+    
+    executeTTS(data, callback) {
         if (!window.speechSynthesis || this.isSpeaking) {
             callback(false);
             return;
@@ -268,13 +278,13 @@ class BankTingTing {
             // Force stop any existing speech
             window.speechSynthesis.cancel();
             
-            // Small delay to ensure clean state
+            // Delay to ensure clean state
             setTimeout(() => {
                 const bankName = this.getBankPronunciation(data.bank_brand);
                 const amount = this.formatMoney(data.amount);
                 const text = `${bankName} nhận được ${amount} đồng. Cám ơn quý Khách.`;
                 
-                console.log('🗣️ Force TTS:', text);
+                console.log('🗣️ Executing TTS:', text);
                 
                 const utterance = new SpeechSynthesisUtterance(text);
                 utterance.lang = 'vi-VN';
@@ -313,15 +323,16 @@ class BankTingTing {
                         completed = true;
                         callback(false);
                     }
-                }, 10000);
+                }, 8000);
                 
+                // Execute TTS
                 window.speechSynthesis.speak(utterance);
                 
-            }, 100);
+            }, 200);
             
         } catch (error) {
             this.isSpeaking = false;
-            console.error('❌ Force TTS failed:', error);
+            console.error('❌ Execute TTS failed:', error);
             callback(false);
         }
     }
@@ -343,18 +354,72 @@ class BankTingTing {
         this.socket.on('connect', () => {
             this.isConnected = true;
             this.updateConnectionStatus(true);
-            console.log('✅ Connected!');
+            console.log('✅ Socket connected!');
         });
         
         this.socket.on('disconnect', () => {
             this.isConnected = false;
             this.updateConnectionStatus(false);
-            console.log('❌ Disconnected!');
+            console.log('❌ Socket disconnected!');
         });
         
+        // CRITICAL: Mode-aware transaction handler
         this.socket.on('new_transaction', (data) => {
             this.handleNewTransaction(data);
         });
+    }
+    
+    handleNewTransaction(data) {
+        const now = Date.now();
+        const transactionId = data.transaction_id || data.id || `${data.bank_brand}_${data.amount}_${now}`;
+        
+        console.log('⚡ Socket transaction received. Mode:', this.currentMode, 'Data:', data);
+        
+        // CRITICAL: Mode-based processing
+        if (this.currentMode === 'foreground') {
+            // FOREGROUND MODE: Process normally
+            console.log('💰 Processing transaction in foreground mode');
+            
+            // Duplicate check
+            if (transactionId === this.lastTransactionId && (now - this.lastTransactionTime) < 5000) {
+                console.log('🚫 Duplicate ignored in foreground');
+                return;
+            }
+            
+            this.lastTransactionId = transactionId;
+            this.lastTransactionTime = now;
+            
+            // Add to UI
+            this.addTransactionToUI(data);
+            
+            // Sound notification
+            if (this.soundEnabled) {
+                this.playNotificationSound();
+            }
+            
+            // Voice notification
+            if (this.ttsEnabled) {
+                setTimeout(() => {
+                    this.executeTTS(data, () => {});
+                }, 300);
+            }
+            
+            // System notification & popup
+            this.showSystemNotification(data);
+            this.showNotificationPopup(data);
+            
+            // Vibrate
+            if (navigator.vibrate) {
+                navigator.vibrate([200, 100, 200]);
+            }
+            
+        } else {
+            // BACKGROUND MODE: Only add to UI, let SW handle audio/TTS
+            console.log('🌙 Transaction in background mode - letting SW handle audio/TTS');
+            
+            // Only add to UI for when user returns
+            this.addTransactionToUI(data);
+        }
     }
     
     setupEventListeners() {
@@ -412,49 +477,9 @@ class BankTingTing {
             content: 'Test giọng đọc'
         };
         
-        this.forceTTS(testData, (success) => {
+        this.executeTTS(testData, (success) => {
             console.log('Test voice result:', success);
         });
-    }
-    
-    handleNewTransaction(data) {
-        const now = Date.now();
-        const transactionId = data.transaction_id || data.id || `${data.bank_brand}_${data.amount}_${now}`;
-        
-        // FIX 2: SIMPLE DUPLICATE CHECK
-        if (transactionId === this.lastTransactionId && (now - this.lastTransactionTime) < 5000) {
-            console.log('🚫 Duplicate ignored:', transactionId);
-            return;
-        }
-        
-        this.lastTransactionId = transactionId;
-        this.lastTransactionTime = now;
-        
-        console.log('💰 New transaction:', data);
-        
-        // Add to UI
-        this.addTransactionToUI(data);
-        
-        // Sound notification
-        if (this.soundEnabled) {
-            this.playNotificationSound();
-        }
-        
-        // Voice notification - CHỈ KHI FOREGROUND
-        if (this.ttsEnabled && !document.hidden) {
-            setTimeout(() => {
-                this.forceTTS(data, () => {});
-            }, 300);
-        }
-        
-        // System notification
-        this.showSystemNotification(data);
-        this.showNotificationPopup(data);
-        
-        // Vibrate
-        if (navigator.vibrate) {
-            navigator.vibrate([200, 100, 200]);
-        }
     }
     
     addTransactionToUI(data) {
@@ -486,9 +511,6 @@ class BankTingTing {
     populateVoiceSelector() {
         const selector = document.getElementById('voiceSelect');
         if (!selector) return;
-        
-        // Keep existing options
-        const existingHTML = selector.innerHTML;
         
         // Add Vietnamese voices
         const vietnameseVoices = this.voices.filter(voice => 
@@ -527,7 +549,7 @@ class BankTingTing {
         
         if (isConnected) {
             dot.className = 'status-dot online';
-            text.textContent = 'Kết nối real-time ✅';
+            text.textContent = `Kết nối real-time ✅ (${this.currentMode} mode)`;
         } else {
             dot.className = 'status-dot offline';
             text.textContent = 'Đang kết nối lại...';
@@ -620,7 +642,7 @@ class BankTingTing {
                 osc2.stop(audioContext.currentTime + 0.2);
             }, 100);
             
-            console.log('🔊 TING TING!');
+            console.log('🔊 TING TING played!');
         } catch (error) {
             console.error('❌ Sound failed:', error);
         }
@@ -677,14 +699,14 @@ class BankTingTing {
     
     async sendTestNotification() {
         try {
-            console.log('🧪 Sending test...');
+            console.log('🧪 Sending test notification...');
             const response = await fetch('/test-notification', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' }
             });
             
             if (response.ok) {
-                console.log('✅ Test sent');
+                console.log('✅ Test notification sent');
             }
         } catch (error) {
             console.error('❌ Test failed:', error);
@@ -737,4 +759,4 @@ document.addEventListener('DOMContentLoaded', () => {
     window.bankTingTing = new BankTingTing();
 });
 
-console.log('🚀 BANK-TING-TING Fixed & Working!');
+console.log('🚀 BANK-TING-TING Mode Switching Ready!');
