@@ -19,9 +19,10 @@ class BankTingTing {
         this.voiceSpeed = 1.2;
         this.voicePitch = 1.0;
         
-        // LocalStorage settings
-        this.storageKey = 'bankTingTing_transactions';
-        this.todayStorageKey = 'bankTingTing_today';
+        // LocalStorage settings - 7 DAYS STORAGE
+        this.storageKey = 'bankTingTing_transactions_7days';
+        this.weekStorageKey = 'bankTingTing_current_week';
+        this.storageRetentionDays = 7; // LƯU 7 NGÀY
         
         // Từ điển phát âm ngân hàng - compact version
         this.bankPronunciations = {
@@ -44,6 +45,7 @@ class BankTingTing {
     
     init() {
         console.log(`🚀 Platform: ${this.isDesktop ? 'Desktop' : 'Mobile'}`);
+        console.log(`💾 Storage: ${this.storageRetentionDays} ngày`);
         
         this.connectSocket();
         this.setupEventListeners();
@@ -66,7 +68,62 @@ class BankTingTing {
             console.log('💻 Desktop mode - minimal features');
         }
         
-        console.log('✅ Ultra-lightweight BANK-TING-TING loaded with Storage!');
+        console.log('✅ Ultra-lightweight BANK-TING-TING loaded with 7-Day Storage!');
+    }
+    
+    // ===============================
+    // 7-DAYS STORAGE HELPER METHODS
+    // ===============================
+    
+    /**
+     * Lấy tuần hiện tại (format: YYYY-WW)
+     */
+    getCurrentWeek() {
+        const now = new Date();
+        const startOfYear = new Date(now.getFullYear(), 0, 1);
+        const pastDaysOfYear = (now - startOfYear) / 86400000;
+        const weekNumber = Math.ceil((pastDaysOfYear + startOfYear.getDay() + 1) / 7);
+        return `${now.getFullYear()}-W${weekNumber.toString().padStart(2, '0')}`;
+    }
+    
+    /**
+     * Kiểm tra giao dịch có trong 7 ngày qua không
+     */
+    isWithin7Days(timestamp) {
+        const transactionDate = new Date(timestamp);
+        const now = new Date();
+        const diffTime = Math.abs(now - transactionDate);
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        return diffDays <= this.storageRetentionDays;
+    }
+    
+    /**
+     * Lọc giao dịch trong 7 ngày
+     */
+    filterLast7DaysTransactions(transactions) {
+        if (!Array.isArray(transactions)) return [];
+        
+        return transactions.filter(transaction => {
+            if (!transaction.timestamp) return false;
+            return this.isWithin7Days(transaction.timestamp);
+        });
+    }
+    
+    /**
+     * Lấy ngày bắt đầu và kết thúc của 7 ngày
+     */
+    get7DaysRange() {
+        const now = new Date();
+        const endDate = new Date(now);
+        const startDate = new Date(now);
+        startDate.setDate(now.getDate() - this.storageRetentionDays + 1);
+        
+        return {
+            start: startDate.toLocaleDateString('vi-VN'),
+            end: endDate.toLocaleDateString('vi-VN'),
+            startISO: startDate.toISOString(),
+            endISO: endDate.toISOString()
+        };
     }
     
     connectSocket() {
@@ -148,7 +205,7 @@ class BankTingTing {
         
         // Storage controls
         addListener('clearHistory', 'click', () => {
-            this.showConfirmDialog('Xóa lịch sử', 'Bạn có chắc muốn xóa tất cả lịch sử giao dịch hôm nay?', () => {
+            this.showConfirmDialog('Xóa lịch sử', 'Bạn có chắc muốn xóa tất cả lịch sử giao dịch 7 ngày qua?', () => {
                 this.clearAllHistory();
             });
         }, 300);
@@ -214,52 +271,64 @@ class BankTingTing {
     }
     
     // ===============================
-    // LOCALSTORAGE METHODS
+    // 7-DAYS LOCALSTORAGE METHODS
     // ===============================
     
     /**
-     * Lưu giao dịch vào LocalStorage
+     * Lưu giao dịch vào LocalStorage - 7 NGÀY
      */
     saveTransactionsToStorage() {
         try {
-            const today = new Date().toDateString();
+            const currentWeek = this.getCurrentWeek();
+            const range = this.get7DaysRange();
+            
+            // Lọc chỉ lấy giao dịch trong 7 ngày gần nhất
+            const validTransactions = this.filterLast7DaysTransactions(this.transactions);
+            
             const dataToStore = {
-                date: today,
-                transactions: this.transactions,
+                week: currentWeek,
+                dateRange: range,
+                retentionDays: this.storageRetentionDays,
+                transactions: validTransactions,
                 totalAmount: this.totalAmount,
-                lastUpdate: new Date().toISOString()
+                lastUpdate: new Date().toISOString(),
+                version: '7days'
             };
             
             localStorage.setItem(this.storageKey, JSON.stringify(dataToStore));
-            localStorage.setItem(this.todayStorageKey, today);
+            localStorage.setItem(this.weekStorageKey, currentWeek);
             
-            console.log(`💾 Đã lưu ${this.transactions.length} giao dịch vào storage`);
+            console.log(`💾 Đã lưu ${validTransactions.length} giao dịch (7 ngày) vào storage`);
         } catch (error) {
             console.error('❌ Lỗi lưu storage:', error);
         }
     }
     
     /**
-     * Tải giao dịch từ LocalStorage
+     * Tải giao dịch từ LocalStorage - 7 NGÀY
      */
     loadStoredTransactions() {
         try {
-            const today = new Date().toDateString();
-            const storedDate = localStorage.getItem(this.todayStorageKey);
+            const currentWeek = this.getCurrentWeek();
+            const storedData = localStorage.getItem(this.storageKey);
             
-            // Chỉ load nếu là cùng ngày
-            if (storedDate === today) {
-                const storedData = localStorage.getItem(this.storageKey);
+            if (storedData) {
+                const parsedData = JSON.parse(storedData);
                 
-                if (storedData) {
-                    const parsedData = JSON.parse(storedData);
+                // Kiểm tra dữ liệu hợp lệ và version
+                if (parsedData.version === '7days' && Array.isArray(parsedData.transactions)) {
+                    // Lọc lại giao dịch để đảm bảo chỉ lấy trong 7 ngày
+                    const validTransactions = this.filterLast7DaysTransactions(parsedData.transactions);
                     
-                    // Kiểm tra dữ liệu hợp lệ
-                    if (parsedData.date === today && Array.isArray(parsedData.transactions)) {
-                        this.transactions = parsedData.transactions;
-                        this.totalAmount = parsedData.totalAmount || 0;
+                    if (validTransactions.length > 0) {
+                        this.transactions = validTransactions;
                         
-                        console.log(`📂 Đã tải ${this.transactions.length} giao dịch từ storage`);
+                        // Tính lại tổng tiền từ giao dịch hợp lệ
+                        this.totalAmount = validTransactions
+                            .filter(t => t.type === 'credit')
+                            .reduce((sum, t) => sum + (t.amount || 0), 0);
+                        
+                        console.log(`📂 Đã tải ${validTransactions.length} giao dịch (7 ngày) từ storage`);
                         
                         // Cập nhật UI
                         setTimeout(() => {
@@ -270,10 +339,11 @@ class BankTingTing {
                         return true;
                     }
                 }
-            } else {
-                // Nếu khác ngày, xóa dữ liệu cũ
-                this.clearOldTransactions();
             }
+            
+            // Nếu không có dữ liệu hợp lệ, xóa dữ liệu cũ
+            this.clearOldTransactions();
+            
         } catch (error) {
             console.error('❌ Lỗi tải storage:', error);
             this.clearOldTransactions();
@@ -283,37 +353,51 @@ class BankTingTing {
     }
     
     /**
-     * Xóa giao dịch cũ (khác ngày)
+     * Xóa giao dịch cũ (hơn 7 ngày)
      */
     clearOldTransactions() {
         try {
-            localStorage.removeItem(this.storageKey);
-            localStorage.removeItem(this.todayStorageKey);
-            console.log('🗑️ Đã xóa giao dịch cũ');
+            // Xóa storage key cũ (1 ngày) nếu có
+            localStorage.removeItem('bankTingTing_transactions');
+            localStorage.removeItem('bankTingTing_today');
+            
+            console.log('🗑️ Đã xóa giao dịch cũ (7 ngày cleanup)');
         } catch (error) {
             console.error('❌ Lỗi xóa storage:', error);
         }
     }
     
     /**
-     * Lấy thống kê từ storage
+     * Lấy thống kê từ storage - 7 NGÀY
      */
     getStorageStats() {
         try {
             const storedData = localStorage.getItem(this.storageKey);
             if (storedData) {
                 const parsedData = JSON.parse(storedData);
+                const validTransactions = this.filterLast7DaysTransactions(parsedData.transactions || []);
+                
                 return {
-                    transactions: parsedData.transactions?.length || 0,
-                    totalAmount: parsedData.totalAmount || 0,
-                    lastUpdate: parsedData.lastUpdate
+                    transactions: validTransactions.length,
+                    totalAmount: validTransactions
+                        .filter(t => t.type === 'credit')
+                        .reduce((sum, t) => sum + (t.amount || 0), 0),
+                    lastUpdate: parsedData.lastUpdate,
+                    dateRange: parsedData.dateRange,
+                    retentionDays: this.storageRetentionDays
                 };
             }
         } catch (error) {
             console.error('❌ Lỗi đọc thống kê:', error);
         }
         
-        return { transactions: 0, totalAmount: 0, lastUpdate: null };
+        return { 
+            transactions: 0, 
+            totalAmount: 0, 
+            lastUpdate: null,
+            dateRange: this.get7DaysRange(),
+            retentionDays: this.storageRetentionDays
+        };
     }
     
     /**
@@ -329,44 +413,55 @@ class BankTingTing {
     }
     
     /**
-     * Auto-save định kỳ (mỗi 30 giây)
+     * Auto-save định kỳ (mỗi 30 giây) + cleanup
      */
     startAutoSave() {
         setInterval(() => {
             if (this.transactions.length > 0) {
+                // Cleanup giao dịch cũ trước khi save
+                this.transactions = this.filterLast7DaysTransactions(this.transactions);
+                
+                // Recalculate total từ giao dịch hợp lệ
+                this.totalAmount = this.transactions
+                    .filter(t => t.type === 'credit')
+                    .reduce((sum, t) => sum + (t.amount || 0), 0);
+                
                 this.saveTransactionsToStorage();
-                console.log('💾 Auto-save completed');
+                console.log('💾 Auto-save completed (7-day cleanup)');
             }
         }, 30000); // 30 giây
     }
     
     /**
-     * Hiển thị thông tin storage trong console
+     * Hiển thị thông tin storage trong console - 7 NGÀY
      */
     logStorageInfo() {
         const stats = this.getStorageStats();
-        console.log('📊 Storage Info:', {
+        const range = this.get7DaysRange();
+        
+        console.log('📊 Storage Info (7 Days):', {
             transactions: stats.transactions,
             totalAmount: this.formatMoney(stats.totalAmount),
+            dateRange: `${range.start} - ${range.end}`,
+            retentionDays: stats.retentionDays,
             lastUpdate: stats.lastUpdate ? new Date(stats.lastUpdate).toLocaleString('vi-VN') : 'Chưa có',
             storageSize: this.getStorageSize()
         });
     }
     
     // ===============================
-    // UI METHODS FOR STORAGE
+    // UI METHODS FOR 7-DAY STORAGE
     // ===============================
     
     /**
-     * Hiển thị modal thông tin storage
+     * Hiển thị modal thông tin storage - 7 NGÀY
      */
     showStorageModal() {
         const modal = document.getElementById('storageModal');
         if (!modal) return;
         
-        // Cập nhật thông tin
         const stats = this.getStorageStats();
-        const today = new Date().toLocaleDateString('vi-VN');
+        const range = this.get7DaysRange();
         
         const storageDate = document.getElementById('storageDate');
         const storageCount = document.getElementById('storageCount');
@@ -374,7 +469,7 @@ class BankTingTing {
         const storageSize = document.getElementById('storageSize');
         const lastUpdate = document.getElementById('lastUpdate');
         
-        if (storageDate) storageDate.textContent = today;
+        if (storageDate) storageDate.textContent = `${range.start} - ${range.end} (7 ngày)`;
         if (storageCount) storageCount.textContent = stats.transactions;
         if (storageMoney) storageMoney.textContent = this.formatMoney(stats.totalAmount);
         if (storageSize) storageSize.textContent = this.getStorageSize();
@@ -395,13 +490,17 @@ class BankTingTing {
     }
     
     /**
-     * Xóa tất cả lịch sử giao dịch
+     * Xóa tất cả lịch sử giao dịch - 7 NGÀY
      */
     clearAllHistory() {
         try {
-            // Xóa localStorage
+            // Xóa localStorage 7 ngày
             localStorage.removeItem(this.storageKey);
-            localStorage.removeItem(this.todayStorageKey);
+            localStorage.removeItem(this.weekStorageKey);
+            
+            // Xóa cả storage cũ (1 ngày) để cleanup
+            localStorage.removeItem('bankTingTing_transactions');
+            localStorage.removeItem('bankTingTing_today');
             
             // Reset dữ liệu trong app
             this.transactions = [];
@@ -411,8 +510,8 @@ class BankTingTing {
             this.updateTransactionsList();
             this.updateStats();
             
-            this.showToast('✅ Đã xóa tất cả lịch sử giao dịch', 'success');
-            console.log('🗑️ Đã xóa tất cả lịch sử');
+            this.showToast('✅ Đã xóa tất cả lịch sử giao dịch (7 ngày)', 'success');
+            console.log('🗑️ Đã xóa tất cả lịch sử (7 ngày)');
             
         } catch (error) {
             console.error('❌ Lỗi xóa lịch sử:', error);
@@ -421,7 +520,7 @@ class BankTingTing {
     }
     
     /**
-     * Xuất dữ liệu giao dịch
+     * Xuất dữ liệu giao dịch - 7 NGÀY
      */
     exportTransactionData() {
         try {
@@ -430,19 +529,23 @@ class BankTingTing {
                 return;
             }
             
-            const today = new Date().toLocaleDateString('vi-VN');
+            const range = this.get7DaysRange();
+            const validTransactions = this.filterLast7DaysTransactions(this.transactions);
+            
             const exportData = {
                 exportDate: new Date().toISOString(),
-                date: today,
-                totalTransactions: this.transactions.length,
+                dateRange: `${range.start} - ${range.end}`,
+                retentionDays: this.storageRetentionDays,
+                totalTransactions: validTransactions.length,
                 totalAmount: this.totalAmount,
-                transactions: this.transactions.map(t => ({
+                transactions: validTransactions.map(t => ({
                     time: new Date(t.timestamp).toLocaleString('vi-VN'),
                     amount: t.amount,
                     type: t.type,
                     content: t.content,
                     bank: t.bank_brand,
-                    account: t.account_number
+                    account: t.account_number,
+                    daysAgo: Math.ceil((new Date() - new Date(t.timestamp)) / (1000 * 60 * 60 * 24))
                 }))
             };
             
@@ -454,7 +557,7 @@ class BankTingTing {
             // Tạo link download
             const link = document.createElement('a');
             link.href = url;
-            link.download = `bank-ting-ting-${today.replace(/\//g, '-')}.json`;
+            link.download = `bank-ting-ting-7days-${new Date().toISOString().split('T')[0]}.json`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -462,8 +565,8 @@ class BankTingTing {
             // Cleanup
             URL.revokeObjectURL(url);
             
-            this.showToast(`📤 Đã xuất ${this.transactions.length} giao dịch`, 'success');
-            console.log('📤 Đã xuất dữ liệu:', exportData);
+            this.showToast(`📤 Đã xuất ${validTransactions.length} giao dịch (7 ngày)`, 'success');
+            console.log('📤 Đã xuất dữ liệu 7 ngày:', exportData);
             
         } catch (error) {
             console.error('❌ Lỗi xuất dữ liệu:', error);
@@ -617,7 +720,7 @@ class BankTingTing {
     }
     
     // ===============================
-    // TRANSACTION HANDLING
+    // TRANSACTION HANDLING - 7 DAYS
     // ===============================
     
     handleNewTransaction(data) {
@@ -666,13 +769,21 @@ class BankTingTing {
     batchUIUpdate(data) {
         // Batch all UI updates in single RAF
         requestAnimationFrame(() => {
-            // Add transaction
-            this.transactions.unshift(data);
+            // Add transaction với timestamp hiện tại
+            const transactionWithTimestamp = {
+                ...data,
+                timestamp: data.timestamp || new Date().toISOString()
+            };
             
-            // Giới hạn số lượng giao dịch lưu trữ (tối đa 50 giao dịch trong ngày)
-            if (this.transactions.length > 50) {
-                this.transactions = this.transactions.slice(0, 50);
+            this.transactions.unshift(transactionWithTimestamp);
+            
+            // Giới hạn số lượng giao dịch lưu trữ (tối đa 350 giao dịch trong 7 ngày ~ 50/ngày)
+            if (this.transactions.length > 350) {
+                this.transactions = this.transactions.slice(0, 350);
             }
+            
+            // Cleanup giao dịch cũ hơn 7 ngày
+            this.transactions = this.filterLast7DaysTransactions(this.transactions);
             
             if (data.type === 'credit') {
                 this.totalAmount += data.amount;
@@ -715,20 +826,28 @@ class BankTingTing {
         const container = document.getElementById('transactionsList');
         if (!container) return;
         
-        if (this.transactions.length === 0) {
-            container.innerHTML = '<div class="no-transactions">Chưa có giao dịch nào...</div>';
+        // Chỉ hiển thị giao dịch trong 7 ngày
+        const validTransactions = this.filterLast7DaysTransactions(this.transactions);
+        
+        if (validTransactions.length === 0) {
+            container.innerHTML = '<div class="no-transactions">Chưa có giao dịch nào trong 7 ngày qua...</div>';
             return;
         }
         
-        // Ultra-efficient DOM update
-        const html = this.transactions.map(transaction => 
-            `<div class="transaction-item ${transaction.type}">
+        // Ultra-efficient DOM update với thông tin ngày
+        const html = validTransactions.map(transaction => {
+            const daysAgo = Math.ceil((new Date() - new Date(transaction.timestamp)) / (1000 * 60 * 60 * 24));
+            const dayLabel = daysAgo === 0 ? 'Hôm nay' : 
+                            daysAgo === 1 ? 'Hôm qua' : 
+                            `${daysAgo} ngày trước`;
+            
+            return `<div class="transaction-item ${transaction.type}">
                 <div class="transaction-header">
                     <div class="transaction-amount ${transaction.type}">
                         ${transaction.type === 'credit' ? '+' : '-'}${this.formatMoney(transaction.amount)}
                     </div>
                     <div class="transaction-time">
-                        ${this.formatTime(transaction.timestamp)}
+                        ${this.formatTime(transaction.timestamp)} • ${dayLabel}
                     </div>
                 </div>
                 <div class="transaction-content">
@@ -737,8 +856,8 @@ class BankTingTing {
                 <div class="transaction-details">
                     ${transaction.bank_brand} • ${transaction.account_number}
                 </div>
-            </div>`
-        ).join('');
+            </div>`;
+        }).join('');
         
         container.innerHTML = html;
     }
@@ -752,11 +871,17 @@ class BankTingTing {
             };
         }
         
+        // Chỉ đếm giao dịch trong 7 ngày
+        const validTransactions = this.filterLast7DaysTransactions(this.transactions);
+        const validAmount = validTransactions
+            .filter(t => t.type === 'credit')
+            .reduce((sum, t) => sum + (t.amount || 0), 0);
+        
         if (this.statElements.total) {
-            this.statElements.total.textContent = this.transactions.length;
+            this.statElements.total.textContent = validTransactions.length;
         }
         if (this.statElements.amount) {
-            this.statElements.amount.textContent = this.formatMoney(this.totalAmount);
+            this.statElements.amount.textContent = this.formatMoney(validAmount);
         }
     }
     
@@ -910,14 +1035,14 @@ class BankTingTing {
     }
     
     // ===============================
-    // DEBUG METHODS
+    // DEBUG METHODS - 7 DAYS
     // ===============================
     
     /**
-     * Method để test localStorage (chỉ dùng khi debug)
+     * Method để test localStorage (chỉ dùng khi debug) - 7 NGÀY
      */
     testLocalStorage() {
-        console.log('🧪 Testing localStorage...');
+        console.log('🧪 Testing localStorage (7 Days)...');
         
         // Test 1: Kiểm tra localStorage có hoạt động không
         try {
@@ -936,33 +1061,54 @@ class BankTingTing {
             return false;
         }
         
-        // Test 2: Tạo fake data để test
+        // Test 2: Tạo fake data để test 7 ngày
+        const now = new Date();
         const fakeTransactions = [
             {
                 id: Date.now(),
-                timestamp: new Date().toISOString(),
+                timestamp: new Date().toISOString(), // Hôm nay
                 amount: 100000,
-                content: 'Test transaction 1',
+                content: 'Test transaction hôm nay',
                 account_number: '1234567890',
-                transaction_id: 'TEST_1',
+                transaction_id: 'TEST_TODAY',
                 bank_brand: 'VCB',
                 type: 'credit'
             },
             {
                 id: Date.now() + 1,
-                timestamp: new Date().toISOString(),
+                timestamp: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(), // 2 ngày trước
                 amount: 200000,
-                content: 'Test transaction 2',
+                content: 'Test transaction 2 ngày trước',
                 account_number: '0987654321',
-                transaction_id: 'TEST_2',
+                transaction_id: 'TEST_2DAYS',
                 bank_brand: 'TCB',
+                type: 'credit'
+            },
+            {
+                id: Date.now() + 2,
+                timestamp: new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString(), // 6 ngày trước
+                amount: 300000,
+                content: 'Test transaction 6 ngày trước',
+                account_number: '1122334455',
+                transaction_id: 'TEST_6DAYS',
+                bank_brand: 'MBBANK',
+                type: 'credit'
+            },
+            {
+                id: Date.now() + 3,
+                timestamp: new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000).toISOString(), // 10 ngày trước (sẽ bị lọc)
+                amount: 400000,
+                content: 'Test transaction 10 ngày trước (cũ)',
+                account_number: '5566778899',
+                transaction_id: 'TEST_10DAYS_OLD',
+                bank_brand: 'BIDV',
                 type: 'credit'
             }
         ];
         
         // Test 3: Lưu fake data
         this.transactions = fakeTransactions;
-        this.totalAmount = 300000;
+        this.totalAmount = 600000; // Tổng của 3 giao dịch hợp lệ
         this.saveTransactionsToStorage();
         
         // Test 4: Clear và load lại
@@ -970,22 +1116,34 @@ class BankTingTing {
         this.totalAmount = 0;
         const loaded = this.loadStoredTransactions();
         
-        if (loaded && this.transactions.length === 2) {
-            console.log('✅ Save/Load localStorage thành công');
+        // Test 5: Kiểm tra kết quả
+        const validTransactions = this.filterLast7DaysTransactions(this.transactions);
+        
+        if (loaded && validTransactions.length === 3) { // Chỉ 3 giao dịch trong 7 ngày
+            console.log('✅ Save/Load localStorage (7 ngày) thành công');
+            console.log(`📊 Loaded ${validTransactions.length}/4 giao dịch (1 cũ bị lọc)`);
+            
+            // Test date filtering
+            validTransactions.forEach(t => {
+                const daysAgo = Math.ceil((new Date() - new Date(t.timestamp)) / (1000 * 60 * 60 * 24));
+                console.log(`  - ${t.content}: ${daysAgo} ngày trước`);
+            });
+            
             this.updateTransactionsList();
             this.updateStats();
             return true;
         } else {
-            console.log('❌ Save/Load localStorage thất bại');
+            console.log('❌ Save/Load localStorage (7 ngày) thất bại');
+            console.log(`❌ Expected 3 transactions, got ${validTransactions.length}`);
             return false;
         }
     }
     
     /**
-     * Debug localStorage size và nội dung
+     * Debug localStorage size và nội dung - 7 NGÀY
      */
     debugLocalStorage() {
-        console.log('🔍 Debug localStorage:');
+        console.log('🔍 Debug localStorage (7 Days):');
         
         try {
             // Tính tổng size của localStorage
@@ -999,18 +1157,39 @@ class BankTingTing {
             
             console.log(`📊 Total localStorage size: ${(totalSize / 1024).toFixed(2)} KB`);
             
-            // Debug data của app
+            // Debug data của app 7 ngày
             const data = localStorage.getItem(this.storageKey);
             if (data) {
                 const parsed = JSON.parse(data);
-                console.log('📱 App data:', {
-                    date: parsed.date,
-                    transactions: parsed.transactions?.length,
+                const validTransactions = this.filterLast7DaysTransactions(parsed.transactions || []);
+                
+                console.log('📱 App data (7 Days):', {
+                    version: parsed.version,
+                    dateRange: parsed.dateRange,
+                    retentionDays: parsed.retentionDays,
+                    totalTransactions: parsed.transactions?.length || 0,
+                    validTransactions: validTransactions.length,
                     totalAmount: parsed.totalAmount,
                     lastUpdate: parsed.lastUpdate
                 });
+                
+                // Phân tích theo ngày
+                if (validTransactions.length > 0) {
+                    console.log('📈 Phân tích theo ngày:');
+                    for (let i = 0; i < 7; i++) {
+                        const date = new Date();
+                        date.setDate(date.getDate() - i);
+                        const dayTransactions = validTransactions.filter(t => {
+                            const tDate = new Date(t.timestamp);
+                            return tDate.toDateString() === date.toDateString();
+                        });
+                        
+                        const dayLabel = i === 0 ? 'Hôm nay' : i === 1 ? 'Hôm qua' : `${i} ngày trước`;
+                        console.log(`  ${dayLabel}: ${dayTransactions.length} giao dịch`);
+                    }
+                }
             } else {
-                console.log('📱 No app data found');
+                console.log('📱 No 7-day data found');
             }
             
         } catch (error) {
@@ -1019,16 +1198,20 @@ class BankTingTing {
     }
     
     /**
-     * Reset hoàn toàn localStorage (emergency)
+     * Reset hoàn toàn localStorage (emergency) - 7 NGÀY
      */
     emergencyReset() {
-        console.log('🚨 Emergency reset localStorage...');
+        console.log('🚨 Emergency reset localStorage (7 Days)...');
         
         try {
             // Backup data trước khi reset
             const backup = {
                 timestamp: new Date().toISOString(),
-                data: JSON.stringify(localStorage)
+                data: {
+                    sevenDays: localStorage.getItem(this.storageKey),
+                    oneDay: localStorage.getItem('bankTingTing_transactions'), // Legacy
+                    allStorage: JSON.stringify(localStorage)
+                }
             };
             
             console.log('💾 Backup created:', backup);
@@ -1045,8 +1228,8 @@ class BankTingTing {
             this.updateTransactionsList();
             this.updateStats();
             
-            console.log('✅ Emergency reset completed');
-            this.showToast('🚨 Đã reset hoàn toàn dữ liệu', 'info');
+            console.log('✅ Emergency reset completed (7 Days)');
+            this.showToast('🚨 Đã reset hoàn toàn dữ liệu (7 ngày)', 'info');
             
             return backup;
             
@@ -1077,22 +1260,29 @@ class BankTingTing {
     }
 }
 
-// DEBUG COMMANDS - DESKTOP SAFE VERSION
+// DEBUG COMMANDS - DESKTOP SAFE VERSION - 7 DAYS
 window.debugBankTing = {
     // Kiểm tra status
     status: () => {
         const app = window.bankTingTing;
         const ready = !!app;
         
-        console.log('🔍 App Status:', {
+        console.log('🔍 App Status (7 Days):', {
             ready: ready,
             bankTingTing: ready ? '✅ Initialized' : '❌ Not ready',
             isConnected: ready ? (app.isConnected || false) : 'Unknown',
             transactions: ready ? (app.transactions?.length || 0) : 'Unknown',
+            validTransactions: ready ? app.filterLast7DaysTransactions(app.transactions || []).length : 'Unknown',
+            retentionDays: ready ? app.storageRetentionDays : 'Unknown',
             platform: /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ? 'Mobile' : 'Desktop',
             domReady: document.readyState,
             timestamp: new Date().toLocaleTimeString('vi-VN')
         });
+        
+        if (ready) {
+            const range = app.get7DaysRange();
+            console.log('📅 Date Range:', `${range.start} - ${range.end}`);
+        }
         
         if (!ready) {
             console.warn('⚠️ App chưa sẵn sàng. Thử lại sau 2-3 giây hoặc refresh trang.');
@@ -1125,7 +1315,7 @@ window.debugBankTing = {
         }
     },
     
-    // Test localStorage
+    // Test localStorage - 7 Days
     test: () => {
         if (!window.debugBankTing.status()) {
             console.warn('⚠️ App chưa sẵn sàng. Đợi và thử lại...');
@@ -1133,7 +1323,7 @@ window.debugBankTing = {
             // Auto retry sau 2 giây
             setTimeout(() => {
                 if (window.bankTingTing) {
-                    console.log('🔄 Retry test localStorage...');
+                    console.log('🔄 Retry test localStorage (7 Days)...');
                     return window.bankTingTing.testLocalStorage();
                 } else {
                     console.error('❌ App vẫn chưa sẵn sàng sau 2 giây');
@@ -1145,7 +1335,7 @@ window.debugBankTing = {
         return window.bankTingTing.testLocalStorage();
     },
     
-    // Debug info với safety
+    // Debug info với safety - 7 Days
     debug: () => {
         if (!window.debugBankTing.status()) {
             console.warn('⚠️ App chưa sẵn sàng');
@@ -1154,20 +1344,20 @@ window.debugBankTing = {
         return window.bankTingTing.debugLocalStorage();
     },
     
-    // Reset với safety  
+    // Reset với safety - 7 Days
     reset: () => {
         if (!window.debugBankTing.status()) {
             console.warn('⚠️ App chưa sẵn sàng');
             return false;
         }
         
-        if (confirm('🚨 Bạn có chắc muốn reset hoàn toàn dữ liệu?')) {
+        if (confirm('🚨 Bạn có chắc muốn reset hoàn toàn dữ liệu 7 ngày?')) {
             return window.bankTingTing.emergencyReset();
         }
         return false;
     },
     
-    // Storage info với safety
+    // Storage info với safety - 7 Days
     info: () => {
         if (!window.debugBankTing.status()) {
             console.warn('⚠️ App chưa sẵn sàng');
@@ -1176,17 +1366,52 @@ window.debugBankTing = {
         return window.bankTingTing.logStorageInfo();
     },
     
-    // Clear history với safety
+    // Clear history với safety - 7 Days
     clear: () => {
         if (!window.debugBankTing.status()) {
             console.warn('⚠️ App chưa sẵn sàng');
             return false;
         }
         
-        if (confirm('🗑️ Bạn có chắc muốn xóa lịch sử?')) {
+        if (confirm('🗑️ Bạn có chắc muốn xóa lịch sử 7 ngày?')) {
             return window.bankTingTing.clearAllHistory();
         }
         return false;
+    },
+    
+    // NEW: Analyze 7-day data
+    analyze: () => {
+        if (!window.debugBankTing.status()) {
+            console.warn('⚠️ App chưa sẵn sàng');
+            return false;
+        }
+        
+        const app = window.bankTingTing;
+        const validTransactions = app.filterLast7DaysTransactions(app.transactions || []);
+        
+        console.log('📊 7-Day Analysis:');
+        console.log(`📈 Total: ${validTransactions.length} giao dịch`);
+        
+        // Group by day
+        const byDay = {};
+        for (let i = 0; i < 7; i++) {
+            const date = new Date();
+            date.setDate(date.getDate() - i);
+            const dateStr = date.toDateString();
+            byDay[dateStr] = validTransactions.filter(t => 
+                new Date(t.timestamp).toDateString() === dateStr
+            );
+        }
+        
+        Object.entries(byDay).forEach(([date, transactions]) => {
+            const dayName = new Date(date).toLocaleDateString('vi-VN');
+            const amount = transactions
+                .filter(t => t.type === 'credit')
+                .reduce((sum, t) => sum + t.amount, 0);
+            console.log(`  ${dayName}: ${transactions.length} giao dịch, ${app.formatMoney(amount)}đ`);
+        });
+        
+        return true;
     },
     
     // Reload page
@@ -1287,15 +1512,16 @@ window.addEventListener('load', () => {
     }, 3000);
 });
 
-// Enhanced help
-console.log('🛠️ DESKTOP-SAFE Debug Commands:');
+// Enhanced help - 7 Days
+console.log('🛠️ DESKTOP-SAFE Debug Commands (7 Days):');
 console.log('- window.debugBankTing.status() ← Kiểm tra trạng thái');
 console.log('- window.debugBankTing.init() ← Force khởi tạo');  
 console.log('- window.debugBankTing.reload() ← Reload page');
-console.log('- window.debugBankTing.test() ← Test localStorage');
-console.log('- window.debugBankTing.info() ← Storage info');
-console.log('- window.debugBankTing.debug() ← Debug localStorage');
-console.log('- window.debugBankTing.clear() ← Clear history');
-console.log('- window.debugBankTing.reset() ← Emergency reset');
+console.log('- window.debugBankTing.test() ← Test localStorage (7 ngày)');
+console.log('- window.debugBankTing.info() ← Storage info (7 ngày)');
+console.log('- window.debugBankTing.debug() ← Debug localStorage (7 ngày)');
+console.log('- window.debugBankTing.analyze() ← Phân tích 7 ngày');
+console.log('- window.debugBankTing.clear() ← Clear history (7 ngày)');
+console.log('- window.debugBankTing.reset() ← Emergency reset (7 ngày)');
 
-console.log(`🚀 BANK-TING-TING loaded for ${checkMobileDevice() ? 'Mobile' : 'Desktop'} with enhanced safety!`);
+console.log(`🚀 BANK-TING-TING loaded for ${checkMobileDevice() ? 'Mobile' : 'Desktop'} with 7-Day Storage!`);
