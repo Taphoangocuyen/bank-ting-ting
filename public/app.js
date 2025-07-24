@@ -1077,128 +1077,225 @@ class BankTingTing {
     }
 }
 
-// Ultra-lightweight initialization
+// DEBUG COMMANDS - DESKTOP SAFE VERSION
+window.debugBankTing = {
+    // Kiểm tra status
+    status: () => {
+        const app = window.bankTingTing;
+        const ready = !!app;
+        
+        console.log('🔍 App Status:', {
+            ready: ready,
+            bankTingTing: ready ? '✅ Initialized' : '❌ Not ready',
+            isConnected: ready ? (app.isConnected || false) : 'Unknown',
+            transactions: ready ? (app.transactions?.length || 0) : 'Unknown',
+            platform: /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ? 'Mobile' : 'Desktop',
+            domReady: document.readyState,
+            timestamp: new Date().toLocaleTimeString('vi-VN')
+        });
+        
+        if (!ready) {
+            console.warn('⚠️ App chưa sẵn sàng. Thử lại sau 2-3 giây hoặc refresh trang.');
+        }
+        
+        return ready;
+    },
+    
+    // Force init
+    init: () => {
+        console.log('🔄 Force initialize app...');
+        
+        if (window.bankTingTing) {
+            console.log('✅ App đã được khởi tạo');
+            return true;
+        }
+        
+        try {
+            if (typeof BankTingTing !== 'undefined') {
+                window.bankTingTing = new BankTingTing();
+                console.log('✅ Force init thành công!');
+                return true;
+            } else {
+                console.error('❌ Class BankTingTing không tồn tại');
+                return false;
+            }
+        } catch (error) {
+            console.error('❌ Force init thất bại:', error);
+            return false;
+        }
+    },
+    
+    // Test localStorage
+    test: () => {
+        if (!window.debugBankTing.status()) {
+            console.warn('⚠️ App chưa sẵn sàng. Đợi và thử lại...');
+            
+            // Auto retry sau 2 giây
+            setTimeout(() => {
+                if (window.bankTingTing) {
+                    console.log('🔄 Retry test localStorage...');
+                    return window.bankTingTing.testLocalStorage();
+                } else {
+                    console.error('❌ App vẫn chưa sẵn sàng sau 2 giây');
+                }
+            }, 2000);
+            return false;
+        }
+        
+        return window.bankTingTing.testLocalStorage();
+    },
+    
+    // Debug info với safety
+    debug: () => {
+        if (!window.debugBankTing.status()) {
+            console.warn('⚠️ App chưa sẵn sàng');
+            return false;
+        }
+        return window.bankTingTing.debugLocalStorage();
+    },
+    
+    // Reset với safety  
+    reset: () => {
+        if (!window.debugBankTing.status()) {
+            console.warn('⚠️ App chưa sẵn sàng');
+            return false;
+        }
+        
+        if (confirm('🚨 Bạn có chắc muốn reset hoàn toàn dữ liệu?')) {
+            return window.bankTingTing.emergencyReset();
+        }
+        return false;
+    },
+    
+    // Storage info với safety
+    info: () => {
+        if (!window.debugBankTing.status()) {
+            console.warn('⚠️ App chưa sẵn sàng');
+            return false;
+        }
+        return window.bankTingTing.logStorageInfo();
+    },
+    
+    // Clear history với safety
+    clear: () => {
+        if (!window.debugBankTing.status()) {
+            console.warn('⚠️ App chưa sẵn sàng');
+            return false;
+        }
+        
+        if (confirm('🗑️ Bạn có chắc muốn xóa lịch sử?')) {
+            return window.bankTingTing.clearAllHistory();
+        }
+        return false;
+    },
+    
+    // Reload page
+    reload: () => {
+        console.log('🔄 Reloading page...');
+        window.location.reload();
+    }
+};
+
+// ENHANCED INITIALIZATION với nhiều fallback
 document.addEventListener('DOMContentLoaded', () => {
-    // Cleanup
+    console.log('📄 DOM Content Loaded');
+    
+    // Cleanup existing
     if (window.bankTingTing) {
-        window.bankTingTing.destroy();
+        try {
+            window.bankTingTing.destroy();
+        } catch (e) {}
         window.bankTingTing = null;
     }
     
-    // Delayed initialization to reduce initial page load impact
-    setTimeout(() => {
+    // Multiple initialization attempts
+    const initAttempts = [100, 500, 1000, 2000]; // ms delays
+    let currentAttempt = 0;
+    
+    const tryInit = () => {
         try {
+            console.log(`🔄 Init attempt ${currentAttempt + 1}/${initAttempts.length}`);
+            
+            if (typeof BankTingTing === 'undefined') {
+                throw new Error('BankTingTing class not loaded');
+            }
+            
             window.bankTingTing = new BankTingTing();
             console.log('✅ BANK-TING-TING khởi tạo thành công!');
             
             // Test debug commands sau khi khởi tạo
             setTimeout(() => {
-                console.log('🔍 Auto-testing debug commands...');
-                if (window.debugBankTing) {
-                    window.debugBankTing.status();
-                }
+                console.log('🧪 Testing debug commands...');
+                window.debugBankTing.status();
+                console.log('🎉 All systems ready!');
             }, 500);
             
+            return true;
+            
         } catch (error) {
-            console.error('❌ Lỗi khởi tạo BANK-TING-TING:', error);
+            console.warn(`⚠️ Init attempt ${currentAttempt + 1} failed:`, error.message);
+            
+            currentAttempt++;
+            if (currentAttempt < initAttempts.length) {
+                setTimeout(tryInit, initAttempts[currentAttempt]);
+            } else {
+                console.error('❌ Tất cả attempts thất bại. Sử dụng window.debugBankTing.init() để thử thủ công');
+            }
+            
+            return false;
         }
-    }, 100);
+    };
+    
+    // Start first attempt
+    setTimeout(tryInit, initAttempts[0]);
 });
 
-// DEBUG COMMANDS - SỬA LỖI isMobile redeclare
-window.debugBankTing = {
-    test: () => {
-        if (window.bankTingTing) {
-            return window.bankTingTing.testLocalStorage();
-        } else {
-            console.warn('⚠️ bankTingTing chưa được khởi tạo. Đợi một chút...');
-            setTimeout(() => {
-                if (window.bankTingTing) {
-                    return window.bankTingTing.testLocalStorage();
-                } else {
-                    console.error('❌ bankTingTing vẫn chưa sẵn sàng');
-                }
-            }, 1000);
-        }
-    },
-    debug: () => {
-        if (window.bankTingTing) {
-            return window.bankTingTing.debugLocalStorage();
-        } else {
-            console.warn('⚠️ bankTingTing chưa được khởi tạo');
-        }
-    },
-    reset: () => {
-        if (window.bankTingTing) {
-            return window.bankTingTing.emergencyReset();
-        } else {
-            console.warn('⚠️ bankTingTing chưa được khởi tạo');
-        }
-    },
-    info: () => {
-        if (window.bankTingTing) {
-            return window.bankTingTing.logStorageInfo();
-        } else {
-            console.warn('⚠️ bankTingTing chưa được khởi tạo');
-        }
-    },
-    clear: () => {
-        if (window.bankTingTing) {
-            return window.bankTingTing.clearAllHistory();
-        } else {
-            console.warn('⚠️ bankTingTing chưa được khởi tạo');
-        }
-    },
-    status: () => {
-        console.log('🔍 Debug Status:', {
-            bankTingTing: !!window.bankTingTing,
-            isConnected: window.bankTingTing?.isConnected || false,
-            transactions: window.bankTingTing?.transactions?.length || 0,
-            platform: window.bankTingTing?.isMobile ? 'Mobile' : 'Desktop'
-        });
-    }
-};
+// SERVICE WORKER - Safe check without variable redeclaration
+const checkMobileDevice = () => /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
-console.log('🛠️ Debug commands available:');
-console.log('- window.debugBankTing.status() - Check status');
-console.log('- window.debugBankTing.test() - Test localStorage');
-console.log('- window.debugBankTing.debug() - Debug info');
-console.log('- window.debugBankTing.reset() - Emergency reset');
-console.log('- window.debugBankTing.info() - Storage info');
-console.log('- window.debugBankTing.clear() - Clear history');
-
-// SERVICE WORKER - SỬA LỖI: Sử dụng function thay vì biến isMobile riêng
-const checkIfMobile = () => /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-
-if (checkIfMobile() && 'serviceWorker' in navigator) {
-    // Only register SW on mobile
+if (checkMobileDevice() && 'serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js')
             .then(reg => console.log('✅ Mobile SW registered'))
             .catch(err => console.log('❌ SW failed:', err));
     });
+} else {
+    console.log('💻 Desktop mode - No Service Worker needed');
 }
 
-// Cleanup on unload
+// Enhanced cleanup
 window.addEventListener('beforeunload', () => {
     if (window.bankTingTing) {
-        window.bankTingTing.destroy();
+        try {
+            window.bankTingTing.destroy();
+        } catch (e) {
+            console.log('⚠️ Cleanup warning:', e.message);
+        }
     }
 });
 
-// Safe initialization check
+// Final safety check
 window.addEventListener('load', () => {
     setTimeout(() => {
         if (!window.bankTingTing) {
-            console.warn('⚠️ BANK-TING-TING chưa được khởi tạo sau 2 giây. Thử khởi tạo thủ công...');
-            try {
-                window.bankTingTing = new BankTingTing();
-                console.log('✅ Khởi tạo thủ công thành công!');
-            } catch (error) {
-                console.error('❌ Khởi tạo thủ công thất bại:', error);
-            }
+            console.warn('🚨 BANK-TING-TING chưa được khởi tạo sau page load');
+            console.log('💡 Chạy: window.debugBankTing.init() để khởi tạo thủ công');
+            console.log('💡 Hoặc: window.debugBankTing.reload() để refresh');
+        } else {
+            console.log('🎉 BANK-TING-TING đã sẵn sàng!');
         }
-    }, 2000);
+    }, 3000);
 });
 
-console.log(`🚀 Ultra-lightweight BANK-TING-TING loaded for ${checkIfMobile() ? 'Mobile' : 'Desktop'} with LocalStorage support!`);
+// Enhanced help
+console.log('🛠️ DESKTOP-SAFE Debug Commands:');
+console.log('- window.debugBankTing.status() ← Kiểm tra trạng thái');
+console.log('- window.debugBankTing.init() ← Force khởi tạo');  
+console.log('- window.debugBankTing.reload() ← Reload page');
+console.log('- window.debugBankTing.test() ← Test localStorage');
+console.log('- window.debugBankTing.info() ← Storage info');
+console.log('- window.debugBankTing.debug() ← Debug localStorage');
+console.log('- window.debugBankTing.clear() ← Clear history');
+console.log('- window.debugBankTing.reset() ← Emergency reset');
+
+console.log(`🚀 BANK-TING-TING loaded for ${checkMobileDevice() ? 'Mobile' : 'Desktop'} with enhanced safety!`);
