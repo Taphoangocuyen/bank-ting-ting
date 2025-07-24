@@ -19,6 +19,10 @@ class BankTingTing {
         this.voiceSpeed = 1.2;
         this.voicePitch = 1.0;
         
+        // LocalStorage settings
+        this.storageKey = 'bankTingTing_transactions';
+        this.todayStorageKey = 'bankTingTing_today';
+        
         // Từ điển phát âm ngân hàng - compact version
         this.bankPronunciations = {
             'VCB': 'việt com băng', 'VIETCOMBANK': 'việt com băng',
@@ -32,6 +36,9 @@ class BankTingTing {
             'AGRIBANK': 'a gơ ri băng', 'VIB': 'vê i băng'
         };
         
+        // Load dữ liệu cũ khi khởi tạo
+        this.loadStoredTransactions();
+        
         this.init();
     }
     
@@ -42,6 +49,14 @@ class BankTingTing {
         this.setupEventListeners();
         this.setDefaultSettings();
         
+        // Bắt đầu auto-save
+        this.startAutoSave();
+        
+        // Hiển thị thông tin storage khi load
+        setTimeout(() => {
+            this.logStorageInfo();
+        }, 1000);
+        
         // Conditional features based on platform
         if (this.isMobile) {
             this.requestNotificationPermission();
@@ -51,7 +66,7 @@ class BankTingTing {
             console.log('💻 Desktop mode - minimal features');
         }
         
-        console.log('✅ Ultra-lightweight BANK-TING-TING loaded!');
+        console.log('✅ Ultra-lightweight BANK-TING-TING loaded with Storage!');
     }
     
     connectSocket() {
@@ -131,6 +146,25 @@ class BankTingTing {
             this.sendTestNotification();
         }, 1000);
         
+        // Storage controls
+        addListener('clearHistory', 'click', () => {
+            this.showConfirmDialog('Xóa lịch sử', 'Bạn có chắc muốn xóa tất cả lịch sử giao dịch hôm nay?', () => {
+                this.clearAllHistory();
+            });
+        }, 300);
+        
+        addListener('exportData', 'click', () => {
+            this.exportTransactionData();
+        }, 500);
+        
+        addListener('storageInfo', 'click', () => {
+            this.showStorageModal();
+        }, 300);
+        
+        addListener('closeModal', 'click', () => {
+            this.hideStorageModal();
+        });
+        
         // Voice settings - lazy load on first interaction
         addListener('voiceSelect', 'focus', () => {
             this.lazyLoadVoices();
@@ -151,6 +185,14 @@ class BankTingTing {
         addListener('testVoice', 'click', () => {
             this.testVoice();
         }, 500);
+        
+        // Click outside modal to close
+        document.addEventListener('click', (e) => {
+            const modal = document.getElementById('storageModal');
+            if (e.target === modal) {
+                this.hideStorageModal();
+            }
+        });
     }
     
     setDefaultSettings() {
@@ -170,6 +212,304 @@ class BankTingTing {
             this.updateTTSButton();
         });
     }
+    
+    // ===============================
+    // LOCALSTORAGE METHODS
+    // ===============================
+    
+    /**
+     * Lưu giao dịch vào LocalStorage
+     */
+    saveTransactionsToStorage() {
+        try {
+            const today = new Date().toDateString();
+            const dataToStore = {
+                date: today,
+                transactions: this.transactions,
+                totalAmount: this.totalAmount,
+                lastUpdate: new Date().toISOString()
+            };
+            
+            localStorage.setItem(this.storageKey, JSON.stringify(dataToStore));
+            localStorage.setItem(this.todayStorageKey, today);
+            
+            console.log(`💾 Đã lưu ${this.transactions.length} giao dịch vào storage`);
+        } catch (error) {
+            console.error('❌ Lỗi lưu storage:', error);
+        }
+    }
+    
+    /**
+     * Tải giao dịch từ LocalStorage
+     */
+    loadStoredTransactions() {
+        try {
+            const today = new Date().toDateString();
+            const storedDate = localStorage.getItem(this.todayStorageKey);
+            
+            // Chỉ load nếu là cùng ngày
+            if (storedDate === today) {
+                const storedData = localStorage.getItem(this.storageKey);
+                
+                if (storedData) {
+                    const parsedData = JSON.parse(storedData);
+                    
+                    // Kiểm tra dữ liệu hợp lệ
+                    if (parsedData.date === today && Array.isArray(parsedData.transactions)) {
+                        this.transactions = parsedData.transactions;
+                        this.totalAmount = parsedData.totalAmount || 0;
+                        
+                        console.log(`📂 Đã tải ${this.transactions.length} giao dịch từ storage`);
+                        
+                        // Cập nhật UI
+                        setTimeout(() => {
+                            this.updateTransactionsList();
+                            this.updateStats();
+                        }, 100);
+                        
+                        return true;
+                    }
+                }
+            } else {
+                // Nếu khác ngày, xóa dữ liệu cũ
+                this.clearOldTransactions();
+            }
+        } catch (error) {
+            console.error('❌ Lỗi tải storage:', error);
+            this.clearOldTransactions();
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Xóa giao dịch cũ (khác ngày)
+     */
+    clearOldTransactions() {
+        try {
+            localStorage.removeItem(this.storageKey);
+            localStorage.removeItem(this.todayStorageKey);
+            console.log('🗑️ Đã xóa giao dịch cũ');
+        } catch (error) {
+            console.error('❌ Lỗi xóa storage:', error);
+        }
+    }
+    
+    /**
+     * Lấy thống kê từ storage
+     */
+    getStorageStats() {
+        try {
+            const storedData = localStorage.getItem(this.storageKey);
+            if (storedData) {
+                const parsedData = JSON.parse(storedData);
+                return {
+                    transactions: parsedData.transactions?.length || 0,
+                    totalAmount: parsedData.totalAmount || 0,
+                    lastUpdate: parsedData.lastUpdate
+                };
+            }
+        } catch (error) {
+            console.error('❌ Lỗi đọc thống kê:', error);
+        }
+        
+        return { transactions: 0, totalAmount: 0, lastUpdate: null };
+    }
+    
+    /**
+     * Tính kích thước storage (KB)
+     */
+    getStorageSize() {
+        try {
+            const data = localStorage.getItem(this.storageKey);
+            return data ? `${(data.length / 1024).toFixed(2)} KB` : '0 KB';
+        } catch (error) {
+            return 'Unknown';
+        }
+    }
+    
+    /**
+     * Auto-save định kỳ (mỗi 30 giây)
+     */
+    startAutoSave() {
+        setInterval(() => {
+            if (this.transactions.length > 0) {
+                this.saveTransactionsToStorage();
+                console.log('💾 Auto-save completed');
+            }
+        }, 30000); // 30 giây
+    }
+    
+    /**
+     * Hiển thị thông tin storage trong console
+     */
+    logStorageInfo() {
+        const stats = this.getStorageStats();
+        console.log('📊 Storage Info:', {
+            transactions: stats.transactions,
+            totalAmount: this.formatMoney(stats.totalAmount),
+            lastUpdate: stats.lastUpdate ? new Date(stats.lastUpdate).toLocaleString('vi-VN') : 'Chưa có',
+            storageSize: this.getStorageSize()
+        });
+    }
+    
+    // ===============================
+    // UI METHODS FOR STORAGE
+    // ===============================
+    
+    /**
+     * Hiển thị modal thông tin storage
+     */
+    showStorageModal() {
+        const modal = document.getElementById('storageModal');
+        if (!modal) return;
+        
+        // Cập nhật thông tin
+        const stats = this.getStorageStats();
+        const today = new Date().toLocaleDateString('vi-VN');
+        
+        const storageDate = document.getElementById('storageDate');
+        const storageCount = document.getElementById('storageCount');
+        const storageMoney = document.getElementById('storageMoney');
+        const storageSize = document.getElementById('storageSize');
+        const lastUpdate = document.getElementById('lastUpdate');
+        
+        if (storageDate) storageDate.textContent = today;
+        if (storageCount) storageCount.textContent = stats.transactions;
+        if (storageMoney) storageMoney.textContent = this.formatMoney(stats.totalAmount);
+        if (storageSize) storageSize.textContent = this.getStorageSize();
+        if (lastUpdate) lastUpdate.textContent = stats.lastUpdate ? 
+            new Date(stats.lastUpdate).toLocaleString('vi-VN') : 'Chưa có dữ liệu';
+        
+        modal.classList.remove('hidden');
+    }
+    
+    /**
+     * Ẩn modal thông tin storage
+     */
+    hideStorageModal() {
+        const modal = document.getElementById('storageModal');
+        if (modal) {
+            modal.classList.add('hidden');
+        }
+    }
+    
+    /**
+     * Xóa tất cả lịch sử giao dịch
+     */
+    clearAllHistory() {
+        try {
+            // Xóa localStorage
+            localStorage.removeItem(this.storageKey);
+            localStorage.removeItem(this.todayStorageKey);
+            
+            // Reset dữ liệu trong app
+            this.transactions = [];
+            this.totalAmount = 0;
+            
+            // Cập nhật UI
+            this.updateTransactionsList();
+            this.updateStats();
+            
+            this.showToast('✅ Đã xóa tất cả lịch sử giao dịch', 'success');
+            console.log('🗑️ Đã xóa tất cả lịch sử');
+            
+        } catch (error) {
+            console.error('❌ Lỗi xóa lịch sử:', error);
+            this.showToast('❌ Lỗi khi xóa lịch sử', 'error');
+        }
+    }
+    
+    /**
+     * Xuất dữ liệu giao dịch
+     */
+    exportTransactionData() {
+        try {
+            if (this.transactions.length === 0) {
+                this.showToast('⚠️ Chưa có giao dịch nào để xuất', 'info');
+                return;
+            }
+            
+            const today = new Date().toLocaleDateString('vi-VN');
+            const exportData = {
+                exportDate: new Date().toISOString(),
+                date: today,
+                totalTransactions: this.transactions.length,
+                totalAmount: this.totalAmount,
+                transactions: this.transactions.map(t => ({
+                    time: new Date(t.timestamp).toLocaleString('vi-VN'),
+                    amount: t.amount,
+                    type: t.type,
+                    content: t.content,
+                    bank: t.bank_brand,
+                    account: t.account_number
+                }))
+            };
+            
+            // Tạo file JSON
+            const dataStr = JSON.stringify(exportData, null, 2);
+            const blob = new Blob([dataStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            
+            // Tạo link download
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `bank-ting-ting-${today.replace(/\//g, '-')}.json`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            // Cleanup
+            URL.revokeObjectURL(url);
+            
+            this.showToast(`📤 Đã xuất ${this.transactions.length} giao dịch`, 'success');
+            console.log('📤 Đã xuất dữ liệu:', exportData);
+            
+        } catch (error) {
+            console.error('❌ Lỗi xuất dữ liệu:', error);
+            this.showToast('❌ Lỗi khi xuất dữ liệu', 'error');
+        }
+    }
+    
+    /**
+     * Hiển thị dialog xác nhận
+     */
+    showConfirmDialog(title, message, onConfirm) {
+        if (confirm(`${title}\n\n${message}`)) {
+            onConfirm();
+        }
+    }
+    
+    /**
+     * Hiển thị toast notification
+     */
+    showToast(message, type = 'info') {
+        // Xóa toast cũ nếu có
+        const oldToast = document.querySelector('.toast');
+        if (oldToast) {
+            oldToast.remove();
+        }
+        
+        // Tạo toast mới
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.textContent = message;
+        
+        document.body.appendChild(toast);
+        
+        // Auto hide sau 3 giây
+        setTimeout(() => {
+            if (toast.parentNode) {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateX(-50%) translateY(-20px)';
+                setTimeout(() => toast.remove(), 300);
+            }
+        }, 3000);
+    }
+    
+    // ===============================
+    // VOICE METHODS
+    // ===============================
     
     lazyLoadVoices() {
         if (this.voices.length > 0) return; // Already loaded
@@ -239,6 +579,47 @@ class BankTingTing {
         this.speakCustomNotification(testData);
     }
     
+    getBankPronunciation(bankCode) {
+        return this.bankPronunciations[bankCode?.toUpperCase()] || 
+               bankCode?.toLowerCase().replace(/bank/gi, 'băng') || 
+               'ngân hàng';
+    }
+    
+    speakCustomNotification(data) {
+        if (!window.speechSynthesis || !this.ttsEnabled) return;
+        
+        try {
+            window.speechSynthesis.cancel();
+            
+            const bankName = this.getBankPronunciation(data.bank_brand);
+            const amount = this.formatMoney(data.amount);
+            const text = `${bankName} nhận được ${amount} đồng. Cám ơn quý Khách.`;
+            
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'vi-VN';
+            utterance.rate = this.voiceSpeed;
+            utterance.pitch = this.voicePitch;
+            utterance.volume = 0.9;
+            
+            const selectedVoice = this.getSelectedVoice();
+            if (selectedVoice) {
+                utterance.voice = selectedVoice;
+            }
+            
+            utterance.onend = () => console.log('✅ TTS done');
+            utterance.onerror = (event) => console.error('❌ TTS error:', event.error);
+            
+            window.speechSynthesis.speak(utterance);
+            
+        } catch (error) {
+            console.error('❌ TTS failed:', error);
+        }
+    }
+    
+    // ===============================
+    // TRANSACTION HANDLING
+    // ===============================
+    
     handleNewTransaction(data) {
         const now = Date.now();
         const transactionId = data.transaction_id || data.id || `${data.bank_brand}_${data.amount}_${now}`;
@@ -255,6 +636,11 @@ class BankTingTing {
         
         // Batch UI updates
         this.batchUIUpdate(data);
+        
+        // Lưu vào storage sau khi cập nhật
+        setTimeout(() => {
+            this.saveTransactionsToStorage();
+        }, 100);
         
         // Notifications
         this.playNotificationSound();
@@ -282,8 +668,10 @@ class BankTingTing {
         requestAnimationFrame(() => {
             // Add transaction
             this.transactions.unshift(data);
-            if (this.transactions.length > 10) { // Even smaller limit for desktop
-                this.transactions = this.transactions.slice(0, 10);
+            
+            // Giới hạn số lượng giao dịch lưu trữ (tối đa 50 giao dịch trong ngày)
+            if (this.transactions.length > 50) {
+                this.transactions = this.transactions.slice(0, 50);
             }
             
             if (data.type === 'credit') {
@@ -295,6 +683,10 @@ class BankTingTing {
             this.updateStats();
         });
     }
+    
+    // ===============================
+    // UI UPDATE METHODS
+    // ===============================
     
     updateConnectionStatus(isConnected) {
         // Micro-optimization: cache elements
@@ -368,6 +760,26 @@ class BankTingTing {
         }
     }
     
+    updateSoundButton() {
+        const btn = document.getElementById('toggleSound');
+        if (btn) {
+            btn.textContent = this.soundEnabled ? '🔊 Tắt âm thanh' : '🔇 Bật âm thanh';
+            btn.className = this.soundEnabled ? 'btn btn-primary' : 'btn btn-secondary';
+        }
+    }
+    
+    updateTTSButton() {
+        const btn = document.getElementById('toggleTTS');
+        if (btn) {
+            btn.textContent = this.ttsEnabled ? '🗣️ Tắt giọng nói' : '🔇 Bật giọng nói';
+            btn.className = this.ttsEnabled ? 'btn btn-primary' : 'btn btn-secondary';
+        }
+    }
+    
+    // ===============================
+    // NOTIFICATION METHODS
+    // ===============================
+    
     showSimpleNotification(data) {
         // Desktop: minimal popup only
         const popup = document.getElementById('notificationPopup');
@@ -427,43 +839,6 @@ class BankTingTing {
         }
     }
     
-    getBankPronunciation(bankCode) {
-        return this.bankPronunciations[bankCode?.toUpperCase()] || 
-               bankCode?.toLowerCase().replace(/bank/gi, 'băng') || 
-               'ngân hàng';
-    }
-    
-    speakCustomNotification(data) {
-        if (!window.speechSynthesis || !this.ttsEnabled) return;
-        
-        try {
-            window.speechSynthesis.cancel();
-            
-            const bankName = this.getBankPronunciation(data.bank_brand);
-            const amount = this.formatMoney(data.amount);
-            const text = `${bankName} nhận được ${amount} đồng. Cám ơn quý Khách.`;
-            
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = 'vi-VN';
-            utterance.rate = this.voiceSpeed;
-            utterance.pitch = this.voicePitch;
-            utterance.volume = 0.9;
-            
-            const selectedVoice = this.getSelectedVoice();
-            if (selectedVoice) {
-                utterance.voice = selectedVoice;
-            }
-            
-            utterance.onend = () => console.log('✅ TTS done');
-            utterance.onerror = (event) => console.error('❌ TTS error:', event.error);
-            
-            window.speechSynthesis.speak(utterance);
-            
-        } catch (error) {
-            console.error('❌ TTS failed:', error);
-        }
-    }
-    
     async requestNotificationPermission() {
         if ('Notification' in window && Notification.permission === 'default') {
             await Notification.requestPermission();
@@ -489,22 +864,6 @@ class BankTingTing {
         setTimeout(() => notification.close(), 4000);
     }
     
-    updateSoundButton() {
-        const btn = document.getElementById('toggleSound');
-        if (btn) {
-            btn.textContent = this.soundEnabled ? '🔊 Tắt âm thanh' : '🔇 Bật âm thanh';
-            btn.className = this.soundEnabled ? 'btn btn-primary' : 'btn btn-secondary';
-        }
-    }
-    
-    updateTTSButton() {
-        const btn = document.getElementById('toggleTTS');
-        if (btn) {
-            btn.textContent = this.ttsEnabled ? '🗣️ Tắt giọng nói' : '🔇 Bật giọng nói';
-            btn.className = this.ttsEnabled ? 'btn btn-primary' : 'btn btn-secondary';
-        }
-    }
-    
     async sendTestNotification() {
         try {
             const controller = new AbortController();
@@ -526,6 +885,10 @@ class BankTingTing {
         }
     }
     
+    // ===============================
+    // UTILITY METHODS
+    // ===============================
+    
     formatMoney(amount) {
         // Cache formatter for performance
         if (!this.moneyFormatter) {
@@ -546,8 +909,158 @@ class BankTingTing {
         return this.timeFormatter.format(new Date(timestamp));
     }
     
+    // ===============================
+    // DEBUG METHODS
+    // ===============================
+    
+    /**
+     * Method để test localStorage (chỉ dùng khi debug)
+     */
+    testLocalStorage() {
+        console.log('🧪 Testing localStorage...');
+        
+        // Test 1: Kiểm tra localStorage có hoạt động không
+        try {
+            localStorage.setItem('test', 'hello');
+            const result = localStorage.getItem('test');
+            localStorage.removeItem('test');
+            
+            if (result === 'hello') {
+                console.log('✅ localStorage hoạt động bình thường');
+            } else {
+                console.log('❌ localStorage có vấn đề');
+                return false;
+            }
+        } catch (error) {
+            console.error('❌ localStorage không khả dụng:', error);
+            return false;
+        }
+        
+        // Test 2: Tạo fake data để test
+        const fakeTransactions = [
+            {
+                id: Date.now(),
+                timestamp: new Date().toISOString(),
+                amount: 100000,
+                content: 'Test transaction 1',
+                account_number: '1234567890',
+                transaction_id: 'TEST_1',
+                bank_brand: 'VCB',
+                type: 'credit'
+            },
+            {
+                id: Date.now() + 1,
+                timestamp: new Date().toISOString(),
+                amount: 200000,
+                content: 'Test transaction 2',
+                account_number: '0987654321',
+                transaction_id: 'TEST_2',
+                bank_brand: 'TCB',
+                type: 'credit'
+            }
+        ];
+        
+        // Test 3: Lưu fake data
+        this.transactions = fakeTransactions;
+        this.totalAmount = 300000;
+        this.saveTransactionsToStorage();
+        
+        // Test 4: Clear và load lại
+        this.transactions = [];
+        this.totalAmount = 0;
+        const loaded = this.loadStoredTransactions();
+        
+        if (loaded && this.transactions.length === 2) {
+            console.log('✅ Save/Load localStorage thành công');
+            this.updateTransactionsList();
+            this.updateStats();
+            return true;
+        } else {
+            console.log('❌ Save/Load localStorage thất bại');
+            return false;
+        }
+    }
+    
+    /**
+     * Debug localStorage size và nội dung
+     */
+    debugLocalStorage() {
+        console.log('🔍 Debug localStorage:');
+        
+        try {
+            // Tính tổng size của localStorage
+            let totalSize = 0;
+            for (let key in localStorage) {
+                if (localStorage.hasOwnProperty(key)) {
+                    totalSize += localStorage[key].length;
+                    console.log(`Key: ${key}, Size: ${localStorage[key].length} chars`);
+                }
+            }
+            
+            console.log(`📊 Total localStorage size: ${(totalSize / 1024).toFixed(2)} KB`);
+            
+            // Debug data của app
+            const data = localStorage.getItem(this.storageKey);
+            if (data) {
+                const parsed = JSON.parse(data);
+                console.log('📱 App data:', {
+                    date: parsed.date,
+                    transactions: parsed.transactions?.length,
+                    totalAmount: parsed.totalAmount,
+                    lastUpdate: parsed.lastUpdate
+                });
+            } else {
+                console.log('📱 No app data found');
+            }
+            
+        } catch (error) {
+            console.error('❌ Debug localStorage error:', error);
+        }
+    }
+    
+    /**
+     * Reset hoàn toàn localStorage (emergency)
+     */
+    emergencyReset() {
+        console.log('🚨 Emergency reset localStorage...');
+        
+        try {
+            // Backup data trước khi reset
+            const backup = {
+                timestamp: new Date().toISOString(),
+                data: JSON.stringify(localStorage)
+            };
+            
+            console.log('💾 Backup created:', backup);
+            
+            // Clear localStorage
+            localStorage.clear();
+            
+            // Reset app state
+            this.transactions = [];
+            this.totalAmount = 0;
+            this.lastTransactionId = '';
+            
+            // Update UI
+            this.updateTransactionsList();
+            this.updateStats();
+            
+            console.log('✅ Emergency reset completed');
+            this.showToast('🚨 Đã reset hoàn toàn dữ liệu', 'info');
+            
+            return backup;
+            
+        } catch (error) {
+            console.error('❌ Emergency reset failed:', error);
+            return null;
+        }
+    }
+    
     destroy() {
         console.log('🗑️ Destroying instance...');
+        
+        // Lưu lần cuối trước khi destroy
+        this.saveTransactionsToStorage();
         
         if (this.socket) {
             this.socket.disconnect();
@@ -597,4 +1110,20 @@ window.addEventListener('beforeunload', () => {
     }
 });
 
-console.log(`🚀 Ultra-lightweight BANK-TING-TING loaded for ${isMobile ? 'Mobile' : 'Desktop'}!`);
+// Debug commands - thêm vào window để có thể gọi từ console
+window.debugBankTing = {
+    test: () => window.bankTingTing?.testLocalStorage(),
+    debug: () => window.bankTingTing?.debugLocalStorage(),
+    reset: () => window.bankTingTing?.emergencyReset(),
+    info: () => window.bankTingTing?.logStorageInfo(),
+    clear: () => window.bankTingTing?.clearAllHistory()
+};
+
+console.log('🛠️ Debug commands available:');
+console.log('- window.debugBankTing.test() - Test localStorage');
+console.log('- window.debugBankTing.debug() - Debug info');
+console.log('- window.debugBankTing.reset() - Emergency reset');
+console.log('- window.debugBankTing.info() - Storage info');
+console.log('- window.debugBankTing.clear() - Clear history');
+
+console.log(`🚀 Ultra-lightweight BANK-TING-TING loaded for ${isMobile ? 'Mobile' : 'Desktop'} with LocalStorage support!`);
