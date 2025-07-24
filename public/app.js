@@ -4,10 +4,10 @@ class BankTingTing {
         this.isConnected = false;
         this.soundEnabled = true;
         this.ttsEnabled = true;
-        this.backgroundMode = true;
         this.transactions = [];
         this.totalAmount = 0;
         this.wakeLock = null;
+        this.processedTransactions = new Set(); // Tránh duplicate
         
         // Voice settings
         this.voices = [];
@@ -18,30 +18,32 @@ class BankTingTing {
         // Background settings
         this.backgroundAudio = null;
         this.heartbeatInterval = null;
+        this.backgroundCheckInterval = null;
+        this.lastNotificationTime = 0;
         
         // Từ điển phát âm ngân hàng
         this.bankPronunciations = {
             'VCB': 'việt com băng',
             'Vietcombank': 'việt com băng', 
             'VIETCOMBANK': 'việt com băng',
-            'TCB': 'tếch com băng',
+            'TCB': 'tê chê băng',
             'Techcombank': 'tếch com băng',
             'TECHCOMBANK': 'tếch com băng',
             'MB': 'mờ bê băng',
             'MBBANK': 'mờ bê băng',
             'MBBank': 'mờ bê băng',
-            'ACB': 'á châu băng',
-            'VTB': 'việt tin băng',
-            'VietinBank': 'việt tin băng',
-            'VIETINBANK': 'việt tin băng',
+            'ACB': 'á chê băng',
+            'VTB': 'việt tín băng',
+            'VietinBank': 'việt tín băng',
+            'VIETINBANK': 'việt tín băng',
             'VPBank': 'vê pê băng',
             'VPBANK': 'vê pê băng',
             'BIDV': 'bê i đê vê',
-            'SHB': 'SHB băng',
-            'Sacombank': 'sa com băng',
-            'SACOMBANK': 'sa com băng',
-            'HDBank': 'hắc đê băng',
-            'HDBANK': 'hắc đê băng',
+            'SHB': 'ét ách bê',
+            'Sacombank': 'sá com băng',
+            'SACOMBANK': 'sá com băng',
+            'HDBank': 'ách đê băng',
+            'HDBANK': 'ách đê băng',
             'TPBank': 'tê pê băng',
             'TPBANK': 'tê pê băng',
             'Eximbank': 'ếch xim băng',
@@ -52,9 +54,9 @@ class BankTingTing {
             'SEABANK': 'sí ây băng',
             'LienVietPostBank': 'liên việt pót băng',
             'LIENVIETPOSTBANK': 'liên việt pót băng',
-            'Agribank': 'a gờ ri băng',
-            'AGRIBANK': 'a gờ ri băng',
-            'VIB': 'vê ai bê băng',
+            'Agribank': 'a gơ ri băng',
+            'AGRIBANK': 'a gơ ri băng',
+            'VIB': 'vê i băng',
             'PVcomBank': 'pê vê com băng',
             'PVCOMBANK': 'pê vê com băng'
         };
@@ -76,18 +78,12 @@ class BankTingTing {
         if ('serviceWorker' in navigator) {
             try {
                 const registration = await navigator.serviceWorker.register('/sw.js');
-                console.log('✅ Service Worker registered:', registration);
+                console.log('✅ Service Worker registered');
                 
                 // Listen for messages from Service Worker
                 navigator.serviceWorker.addEventListener('message', (event) => {
                     this.handleServiceWorkerMessage(event.data);
                 });
-                
-                // Setup background sync
-                if ('sync' in window.ServiceWorkerRegistration.prototype) {
-                    await registration.sync.register('background-check');
-                    console.log('✅ Background sync registered');
-                }
                 
             } catch (error) {
                 console.error('❌ Service Worker registration failed:', error);
@@ -96,90 +92,105 @@ class BankTingTing {
     }
     
     handleServiceWorkerMessage(message) {
-        console.log('📨 Message from Service Worker:', message);
-        
         if (message.type === 'PLAY_SOUND' && message.data) {
-            // Phát âm thanh ngay cả khi app ở background
+            // Tránh duplicate notifications
+            const transactionId = message.data.transaction_id || message.data.id;
+            if (transactionId && this.processedTransactions.has(transactionId)) {
+                return;
+            }
+            
+            if (transactionId) {
+                this.processedTransactions.add(transactionId);
+            }
+            
             this.playNotificationSound();
             
             if (this.ttsEnabled) {
-                this.speakCustomNotification(message.data);
+                setTimeout(() => {
+                    this.speakCustomNotification(message.data);
+                }, 300);
             }
         }
     }
     
     startBackgroundMode() {
-        // Tạo audio im lặng để giữ app hoạt động
-        this.createSilentAudio();
+        // Clear existing intervals để tránh duplicate
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+        }
+        if (this.backgroundCheckInterval) {
+            clearInterval(this.backgroundCheckInterval);
+        }
         
-        // Heartbeat để giữ connection
+        // Heartbeat interval - CHỈ KHI CẦN
         this.heartbeatInterval = setInterval(() => {
             if (this.socket && this.socket.connected) {
                 this.socket.emit('heartbeat', { timestamp: Date.now() });
-                console.log('💓 Heartbeat sent');
             }
-        }, 25000); // Mỗi 25 giây
+        }, 30000); // 30 giây thay vì 25 giây
         
-        // Background notification check
-        setInterval(() => {
-            if (document.hidden) {
+        // Background check - CHỈ KHI Ở BACKGROUND
+        this.backgroundCheckInterval = setInterval(() => {
+            if (document.hidden && this.isConnected) {
                 this.checkBackgroundNotifications();
             }
-        }, 10000); // Mỗi 10 giây khi ở background
+        }, 15000); // 15 giây thay vì 10 giây để giảm spam
         
         console.log('🌙 Background mode started');
     }
     
-    createSilentAudio() {
-        // Tạo audio im lặng để prevent sleep
-        this.backgroundAudio = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=');
-        this.backgroundAudio.loop = true;
-        this.backgroundAudio.volume = 0.01; // Rất nhỏ nhưng không phải 0
-        
-        // Play khi app vào background
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                console.log('📱 App vào background - Bắt đầu chế độ im lặng');
-                this.backgroundAudio.play().catch(e => console.log('Silent audio failed:', e));
-            } else {
-                console.log('📱 App trở lại foreground - Dừng chế độ im lặng');
-                this.backgroundAudio.pause();
-            }
-        });
-    }
-    
     async checkBackgroundNotifications() {
         try {
+            const now = Date.now();
+            
+            // Tránh check quá thường xuyên
+            if (now - this.lastNotificationTime < 10000) {
+                return;
+            }
+            
             const response = await fetch('/api/logs');
             const data = await response.json();
             
-            // Kiểm tra giao dịch mới trong 30 giây gần đây
             if (data.recent_transactions && data.recent_transactions.length > 0) {
                 const latest = data.recent_transactions[0];
-                const now = new Date();
                 const transactionTime = new Date(latest.time);
-                const diffInSeconds = (now - transactionTime) / 1000;
+                const diffInSeconds = (now - transactionTime.getTime()) / 1000;
                 
-                if (diffInSeconds < 30) {
-                    console.log('🔔 Phát hiện giao dịch mới ở background!');
+                // CHỈ XỬ LÝ GIAO DỊCH MỚI (trong 20 giây)
+                if (diffInSeconds < 20) {
+                    const transactionId = latest.transaction_id || latest.id || latest.time;
                     
-                    // Phát âm thanh và giọng nói ngay cả khi ở background
-                    this.playNotificationSound();
-                    
-                    if (this.ttsEnabled) {
-                        const fakeData = {
-                            amount: latest.amount,
-                            bank_brand: latest.bank,
-                            content: latest.content
-                        };
-                        this.speakCustomNotification(fakeData);
+                    // Tránh duplicate
+                    if (this.processedTransactions.has(transactionId)) {
+                        return;
                     }
                     
-                    // Show system notification
+                    this.processedTransactions.add(transactionId);
+                    this.lastNotificationTime = now;
+                    
+                    console.log('🔔 Background notification:', latest);
+                    
+                    // Phát âm thanh
+                    this.playNotificationSound();
+                    
+                    // Text-to-speech
+                    if (this.ttsEnabled) {
+                        setTimeout(() => {
+                            const fakeData = {
+                                amount: latest.amount,
+                                bank_brand: latest.bank,
+                                content: latest.content
+                            };
+                            this.speakCustomNotification(fakeData);
+                        }, 500);
+                    }
+                    
+                    // System notification
                     if (Notification.permission === 'granted') {
                         new Notification('BANK-TING-TING 🔔', {
                             body: `${latest.bank} nhận được +${this.formatMoney(latest.amount)}đ`,
                             icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">💰</text></svg>',
+                            tag: 'bank-transaction-' + transactionId,
                             requireInteraction: false,
                             silent: false
                         });
@@ -192,31 +203,56 @@ class BankTingTing {
     }
     
     connectSocket() {
-        this.socket = io();
+        // Tránh multiple connections
+        if (this.socket) {
+            this.socket.disconnect();
+        }
+        
+        this.socket = io({
+            forceNew: true,
+            reconnection: true,
+            reconnectionDelay: 1000,
+            reconnectionAttempts: 5,
+            timeout: 10000
+        });
         
         this.socket.on('connect', () => {
             this.isConnected = true;
             this.updateConnectionStatus(true);
-            console.log('✅ Kết nối thành công!');
+            console.log('✅ Real-time connection established!');
         });
         
         this.socket.on('disconnect', () => {
             this.isConnected = false;
             this.updateConnectionStatus(false);
-            console.log('❌ Mất kết nối!');
+            console.log('❌ Connection lost, attempting to reconnect...');
         });
         
+        // REAL-TIME TRANSACTION HANDLER
         this.socket.on('new_transaction', (data) => {
+            console.log('⚡ REAL-TIME TRANSACTION RECEIVED:', data);
             this.handleNewTransaction(data);
         });
         
-        // Heartbeat response
         this.socket.on('heartbeat_response', (data) => {
-            console.log('💗 Heartbeat response:', data);
+            console.log('💗 Heartbeat OK');
         });
     }
     
     setupEventListeners() {
+        // Tránh duplicate listeners
+        const removeExistingListeners = () => {
+            const buttons = ['toggleSound', 'toggleTTS', 'testNotification', 'testVoice'];
+            buttons.forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.replaceWith(element.cloneNode(true));
+                }
+            });
+        };
+        
+        removeExistingListeners();
+        
         // Toggle sound
         document.getElementById('toggleSound').addEventListener('click', () => {
             this.soundEnabled = !this.soundEnabled;
@@ -237,17 +273,15 @@ class BankTingTing {
         // Voice settings
         document.getElementById('voiceSelect').addEventListener('change', (e) => {
             this.selectedVoice = e.target.value;
-            console.log('🎭 Đã chọn giọng:', this.selectedVoice);
+            console.log('🎭 Selected voice:', this.selectedVoice);
         });
         
         document.getElementById('voiceSpeed').addEventListener('change', (e) => {
             this.voiceSpeed = parseFloat(e.target.value);
-            console.log('⚡ Tốc độ đọc:', this.voiceSpeed);
         });
         
         document.getElementById('voicePitch').addEventListener('change', (e) => {
             this.voicePitch = parseFloat(e.target.value);
-            console.log('🎵 Cao độ giọng:', this.voicePitch);
         });
         
         // Test voice
@@ -258,30 +292,21 @@ class BankTingTing {
         // Page visibility change
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
-                console.log('📱 App chuyển sang background - Chế độ background bật');
+                console.log('📱 App went to background');
             } else {
-                console.log('📱 App trở lại foreground - Chế độ normal');
-            }
-        });
-        
-        // Before unload - giữ connection
-        window.addEventListener('beforeunload', () => {
-            if (this.socket) {
-                this.socket.emit('keep_alive');
+                console.log('📱 App returned to foreground');
             }
         });
     }
     
     loadVoices() {
         if (!window.speechSynthesis) {
-            console.log('❌ Trình duyệt không hỗ trợ text-to-speech');
             return;
         }
         
         const loadVoicesFunction = () => {
             this.voices = window.speechSynthesis.getVoices();
             this.populateVoiceSelector();
-            console.log('🗣️ Đã tải', this.voices.length, 'giọng nói');
         };
         
         loadVoicesFunction();
@@ -290,79 +315,34 @@ class BankTingTing {
     
     populateVoiceSelector() {
         const selector = document.getElementById('voiceSelect');
+        if (!selector) return;
         
-        // Clear existing options except default ones
-        const defaultOptions = selector.querySelectorAll('option[value="auto"], option[value="default"]');
-        selector.innerHTML = '';
-        defaultOptions.forEach(option => selector.appendChild(option));
-        
-        // Find Vietnamese voices
+        // Keep default options
+        const existingOptions = selector.innerHTML;
         const vietnameseVoices = this.voices.filter(voice => 
             voice.lang.includes('vi') || 
             voice.name.toLowerCase().includes('vietnam') ||
-            voice.name.toLowerCase().includes('vietnamese') ||
-            voice.name.toLowerCase().includes('vi-vn')
+            voice.name.toLowerCase().includes('vietnamese')
         );
         
-        // Add Vietnamese voices
-        vietnameseVoices.forEach((voice, index) => {
+        vietnameseVoices.forEach(voice => {
             const option = document.createElement('option');
             option.value = voice.name;
-            option.textContent = `🇻🇳 ${voice.name} (${voice.lang})`;
+            option.textContent = `🇻🇳 ${voice.name}`;
             selector.appendChild(option);
         });
-        
-        // Add other quality voices
-        const otherGoodVoices = this.voices.filter(voice => 
-            !voice.lang.includes('vi') && (
-                voice.lang.includes('en') || 
-                voice.name.toLowerCase().includes('google') ||
-                voice.name.toLowerCase().includes('apple') ||
-                voice.name.toLowerCase().includes('microsoft')
-            )
-        );
-        
-        if (otherGoodVoices.length > 0) {
-            const separator = document.createElement('option');
-            separator.disabled = true;
-            separator.textContent = '────── Giọng khác ──────';
-            selector.appendChild(separator);
-            
-            otherGoodVoices.slice(0, 10).forEach(voice => {
-                const option = document.createElement('option');
-                option.value = voice.name;
-                option.textContent = `🌐 ${voice.name} (${voice.lang})`;
-                selector.appendChild(option);
-            });
-        }
-        
-        console.log('🗣️ Tìm thấy', vietnameseVoices.length, 'giọng tiếng Việt');
     }
     
     getSelectedVoice() {
         if (this.selectedVoice === 'auto') {
             const vietnameseVoices = this.voices.filter(voice => 
                 voice.lang.includes('vi') || 
-                voice.name.toLowerCase().includes('vietnam') ||
-                voice.name.toLowerCase().includes('vietnamese')
+                voice.name.toLowerCase().includes('vietnam')
             );
-            
-            if (vietnameseVoices.length > 0) {
-                const premiumVoice = vietnameseVoices.find(voice => 
-                    voice.name.toLowerCase().includes('google') ||
-                    voice.name.toLowerCase().includes('apple') ||
-                    voice.name.toLowerCase().includes('microsoft')
-                );
-                
-                return premiumVoice || vietnameseVoices[0];
-            }
-            
-            return null;
-        } else if (this.selectedVoice === 'default') {
-            return null;
-        } else {
-            return this.voices.find(voice => voice.name === this.selectedVoice);
+            return vietnameseVoices[0] || null;
         }
+        
+        return this.voices.find(voice => voice.name === this.selectedVoice) || null;
     }
     
     testVoice() {
@@ -376,7 +356,14 @@ class BankTingTing {
     }
     
     handleNewTransaction(data) {
-        console.log('🔔 Giao dịch mới:', data);
+        // Tránh duplicate processing
+        const transactionId = data.transaction_id || data.id || data.timestamp;
+        if (this.processedTransactions.has(transactionId)) {
+            return;
+        }
+        
+        this.processedTransactions.add(transactionId);
+        console.log('💰 Processing new transaction:', data);
         
         // Add to transactions list
         this.transactions.unshift(data);
@@ -396,22 +383,22 @@ class BankTingTing {
         // Show popup notification
         this.showNotificationPopup(data);
         
-        // Play sound (hoạt động cả background)
+        // Play sound
         if (this.soundEnabled) {
             this.playNotificationSound();
         }
         
-        // Text-to-speech (hoạt động cả background)
+        // Text-to-speech với delay để tránh conflict
         if (this.ttsEnabled) {
             setTimeout(() => {
                 this.speakCustomNotification(data);
-            }, 500); // Delay nhỏ để tránh conflict với sound
+            }, 500);
         }
         
         // Show system notification
         this.showSystemNotification(data);
         
-        // Vibrate (if supported)
+        // Vibrate
         if (navigator.vibrate) {
             navigator.vibrate([200, 100, 200]);
         }
@@ -419,20 +406,23 @@ class BankTingTing {
     
     updateConnectionStatus(isConnected) {
         const statusElement = document.getElementById('connectionStatus');
+        if (!statusElement) return;
+        
         const dot = statusElement.querySelector('.status-dot');
         const text = statusElement.querySelector('span:last-child');
         
         if (isConnected) {
             dot.className = 'status-dot online';
-            text.textContent = 'Đã kết nối (Background OK)';
+            text.textContent = 'Kết nối real-time ✅';
         } else {
             dot.className = 'status-dot offline';
-            text.textContent = 'Mất kết nối';
+            text.textContent = 'Đang kết nối lại...';
         }
     }
     
     updateTransactionsList() {
         const container = document.getElementById('transactionsList');
+        if (!container) return;
         
         if (this.transactions.length === 0) {
             container.innerHTML = '<div class="no-transactions">Chưa có giao dịch nào...</div>';
@@ -453,24 +443,29 @@ class BankTingTing {
                     ${transaction.content}
                 </div>
                 <div class="transaction-details">
-                    ${this.getBankDisplayName(transaction.bank_brand)} • ${transaction.account_number}
+                    ${transaction.bank_brand} • ${transaction.account_number}
                 </div>
             </div>
         `).join('');
     }
     
     updateStats() {
-        document.getElementById('totalTransactions').textContent = this.transactions.length;
-        document.getElementById('totalAmount').textContent = this.formatMoney(this.totalAmount);
+        const totalEl = document.getElementById('totalTransactions');
+        const amountEl = document.getElementById('totalAmount');
+        
+        if (totalEl) totalEl.textContent = this.transactions.length;
+        if (amountEl) amountEl.textContent = this.formatMoney(this.totalAmount);
     }
     
     showNotificationPopup(data) {
         const popup = document.getElementById('notificationPopup');
+        if (!popup) return;
+        
         const amount = popup.querySelector('.notification-amount');
         const desc = popup.querySelector('.notification-desc');
         
-        amount.textContent = `+${this.formatMoney(data.amount)}`;
-        desc.textContent = data.content;
+        if (amount) amount.textContent = `+${this.formatMoney(data.amount)}`;
+        if (desc) desc.textContent = data.content;
         
         popup.classList.remove('hidden');
         
@@ -481,74 +476,63 @@ class BankTingTing {
     
     playNotificationSound() {
         try {
-            // Tạo âm thanh "TING TING" đặc trưng
             const audioContext = new (window.AudioContext || window.webkitAudioContext)();
             
-            // Âm đầu tiên - TING
-            const oscillator1 = audioContext.createOscillator();
-            const gainNode1 = audioContext.createGain();
-            oscillator1.connect(gainNode1);
-            gainNode1.connect(audioContext.destination);
+            // TING 1
+            const osc1 = audioContext.createOscillator();
+            const gain1 = audioContext.createGain();
+            osc1.connect(gain1);
+            gain1.connect(audioContext.destination);
             
-            oscillator1.frequency.setValueAtTime(800, audioContext.currentTime);
-            gainNode1.gain.setValueAtTime(0.3, audioContext.currentTime);
-            gainNode1.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+            osc1.frequency.setValueAtTime(800, audioContext.currentTime);
+            gain1.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gain1.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
             
-            oscillator1.start(audioContext.currentTime);
-            oscillator1.stop(audioContext.currentTime + 0.2);
+            osc1.start(audioContext.currentTime);
+            osc1.stop(audioContext.currentTime + 0.2);
             
-            // Âm thứ hai - TING (sau 0.1 giây)
+            // TING 2
             setTimeout(() => {
-                const oscillator2 = audioContext.createOscillator();
-                const gainNode2 = audioContext.createGain();
-                oscillator2.connect(gainNode2);
-                gainNode2.connect(audioContext.destination);
+                const osc2 = audioContext.createOscillator();
+                const gain2 = audioContext.createGain();
+                osc2.connect(gain2);
+                gain2.connect(audioContext.destination);
                 
-                oscillator2.frequency.setValueAtTime(900, audioContext.currentTime);
-                gainNode2.gain.setValueAtTime(0.3, audioContext.currentTime);
-                gainNode2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+                osc2.frequency.setValueAtTime(900, audioContext.currentTime);
+                gain2.gain.setValueAtTime(0.3, audioContext.currentTime);
+                gain2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
                 
-                oscillator2.start(audioContext.currentTime);
-                oscillator2.stop(audioContext.currentTime + 0.2);
+                osc2.start(audioContext.currentTime);
+                osc2.stop(audioContext.currentTime + 0.2);
             }, 100);
             
-            console.log('🔊 TING TING played!');
+            console.log('🔊 TING TING!');
         } catch (error) {
-            console.error('❌ Sound play failed:', error);
+            console.error('❌ Sound failed:', error);
         }
     }
     
     getBankPronunciation(bankCode) {
-        const pronunciation = this.bankPronunciations[bankCode] || 
-                            this.bankPronunciations[bankCode?.toUpperCase()] ||
-                            bankCode?.toLowerCase().replace(/bank/gi, 'băng') || 
-                            'ngân hàng';
-        return pronunciation;
-    }
-    
-    getBankDisplayName(bankCode) {
-        return bankCode || 'Unknown';
+        return this.bankPronunciations[bankCode] || 
+               this.bankPronunciations[bankCode?.toUpperCase()] ||
+               bankCode?.toLowerCase().replace(/bank/gi, 'băng') || 
+               'ngân hàng';
     }
     
     speakCustomNotification(data) {
-        if (!window.speechSynthesis) {
-            console.log('❌ Trình duyệt không hỗ trợ text-to-speech');
-            return;
-        }
+        if (!window.speechSynthesis) return;
         
         try {
-            // Cancel any previous speech
+            // Cancel previous speech
             window.speechSynthesis.cancel();
             
             const bankName = this.getBankPronunciation(data.bank_brand);
             const amount = this.formatMoney(data.amount);
+            const text = `${bankName} nhận được ${amount} đồng. Cám ơn quý Khách.`;
             
-            const customText = `${bankName} nhận được ${amount} đồng. Cám ơn quý Khách.`;
+            console.log('🗣️ Speaking:', text);
             
-            console.log('🗣️ Phát âm (Background OK):', customText);
-            
-            const utterance = new SpeechSynthesisUtterance(customText);
-            
+            const utterance = new SpeechSynthesisUtterance(text);
             utterance.lang = 'vi-VN';
             utterance.rate = this.voiceSpeed;
             utterance.pitch = this.voicePitch;
@@ -557,29 +541,17 @@ class BankTingTing {
             const selectedVoice = this.getSelectedVoice();
             if (selectedVoice) {
                 utterance.voice = selectedVoice;
-                console.log('✅ Sử dụng giọng:', selectedVoice.name);
             }
             
-            utterance.onerror = (event) => {
-                console.error('❌ Lỗi text-to-speech:', event.error);
-            };
-            
-            utterance.onend = () => {
-                console.log('✅ Hoàn thành phát âm');
-            };
-            
-            // Force play even in background
             window.speechSynthesis.speak(utterance);
             
         } catch (error) {
-            console.error('❌ Speech synthesis failed:', error);
+            console.error('❌ TTS failed:', error);
         }
     }
     
     async requestNotificationPermission() {
-        if (!('Notification' in window)) return;
-        
-        if (Notification.permission === 'default') {
+        if ('Notification' in window && Notification.permission === 'default') {
             const permission = await Notification.requestPermission();
             console.log('🔔 Notification permission:', permission);
         }
@@ -588,13 +560,10 @@ class BankTingTing {
     showSystemNotification(data) {
         if (!('Notification' in window) || Notification.permission !== 'granted') return;
         
-        const bankName = this.getBankDisplayName(data.bank_brand);
-        
         const notification = new Notification('BANK-TING-TING 🔔', {
-            body: `${bankName} nhận được +${this.formatMoney(data.amount)}đ\n${data.content}`,
+            body: `${data.bank_brand} nhận được +${this.formatMoney(data.amount)}đ`,
             icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">💰</text></svg>',
-            badge: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🔔</text></svg>',
-            tag: 'bank-transaction',
+            tag: 'bank-transaction-' + (data.transaction_id || Date.now()),
             requireInteraction: false,
             silent: false
         });
@@ -604,56 +573,55 @@ class BankTingTing {
             notification.close();
         };
         
-        setTimeout(() => notification.close(), 8000);
+        setTimeout(() => notification.close(), 6000);
     }
     
     updateSoundButton() {
         const btn = document.getElementById('toggleSound');
-        btn.textContent = this.soundEnabled ? '🔊 Tắt âm thanh' : '🔇 Bật âm thanh';
-        btn.className = this.soundEnabled ? 'btn btn-primary' : 'btn btn-secondary';
+        if (btn) {
+            btn.textContent = this.soundEnabled ? '🔊 Tắt âm thanh' : '🔇 Bật âm thanh';
+            btn.className = this.soundEnabled ? 'btn btn-primary' : 'btn btn-secondary';
+        }
     }
     
     updateTTSButton() {
         const btn = document.getElementById('toggleTTS');
-        btn.textContent = this.ttsEnabled ? '🗣️ Tắt giọng nói' : '🔇 Bật giọng nói';
-        btn.className = this.ttsEnabled ? 'btn btn-primary' : 'btn btn-secondary';
+        if (btn) {
+            btn.textContent = this.ttsEnabled ? '🗣️ Tắt giọng nói' : '🔇 Bật giọng nói';
+            btn.className = this.ttsEnabled ? 'btn btn-primary' : 'btn btn-secondary';
+        }
     }
     
     async sendTestNotification() {
         try {
+            console.log('🧪 Sending test notification...');
             const response = await fetch('/test-notification', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' }
             });
             
             if (response.ok) {
-                console.log('✅ Đã gửi test notification');
+                console.log('✅ Test notification sent');
             }
         } catch (error) {
-            console.error('❌ Lỗi gửi test notification:', error);
+            console.error('❌ Test failed:', error);
         }
     }
     
     async preventSleep() {
-        // Screen Wake Lock API
         if ('wakeLock' in navigator) {
             try {
                 this.wakeLock = await navigator.wakeLock.request('screen');
-                console.log('🔒 Screen wake lock active');
+                console.log('🔒 Wake lock active');
                 
                 document.addEventListener('visibilitychange', async () => {
-                    if (document.visibilityState === 'visible' && this.wakeLock.released) {
+                    if (document.visibilityState === 'visible' && this.wakeLock?.released) {
                         this.wakeLock = await navigator.wakeLock.request('screen');
-                        console.log('🔒 Screen wake lock re-activated');
                     }
                 });
                 
-                this.wakeLock.addEventListener('release', () => {
-                    console.log('🔓 Screen wake lock released');
-                });
-                
             } catch (err) {
-                console.log('❌ Wake lock error:', err);
+                console.log('❌ Wake lock failed:', err);
             }
         }
     }
@@ -669,11 +637,33 @@ class BankTingTing {
             second: '2-digit'
         });
     }
+    
+    // Cleanup function
+    destroy() {
+        if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+        if (this.backgroundCheckInterval) clearInterval(this.backgroundCheckInterval);
+        if (this.socket) this.socket.disconnect();
+        if (this.wakeLock) this.wakeLock.release();
+    }
 }
 
-// Khởi tạo ứng dụng khi DOM đã sẵn sàng
+// Khởi tạo ứng dụng
 document.addEventListener('DOMContentLoaded', () => {
+    // Cleanup existing instance
+    if (window.bankTingTing) {
+        window.bankTingTing.destroy();
+    }
+    
     window.bankTingTing = new BankTingTing();
 });
 
-console.log('🚀 BANK-TING-TING với Background Support loaded!');
+// Service Worker registration
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+            .then(reg => console.log('✅ Service Worker registered'))
+            .catch(err => console.log('❌ Service Worker failed:', err));
+    });
+}
+
+console.log('🚀 BANK-TING-TING Real-time System Loaded!');
