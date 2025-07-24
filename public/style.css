@@ -103,6 +103,62 @@ body {
     transform: none;
 }
 
+/* Voice Settings Styles */
+.voice-settings {
+    background: #f8f9fa;
+    margin: 20px;
+    padding: 20px;
+    border-radius: 12px;
+    border: 1px solid #e9ecef;
+}
+
+.voice-settings h3 {
+    margin: 0 0 15px 0;
+    color: #495057;
+    font-size: 16px;
+}
+
+.setting-group {
+    margin-bottom: 15px;
+}
+
+.setting-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #495057;
+}
+
+.voice-selector {
+    width: 100%;
+    padding: 10px 12px;
+    border: 2px solid #e9ecef;
+    border-radius: 8px;
+    font-size: 14px;
+    background: white;
+    color: #495057;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.voice-selector:focus {
+    outline: none;
+    border-color: #2196F3;
+    box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.1);
+}
+
+.btn-test {
+    background: #28a745;
+    color: white;
+    width: 100%;
+    margin-top: 10px;
+}
+
+.btn-test:hover {
+    background: #218838;
+}
+
 .stats {
     display: flex;
     gap: 15px;
@@ -270,6 +326,11 @@ body {
     
     .stats {
         flex-direction: column;
+    }
+    
+    .voice-settings {
+        margin: 15px;
+        padding: 15px;
     }
 }
 
