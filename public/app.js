@@ -6,24 +6,18 @@ class BankTingTing {
         this.ttsEnabled = true;
         this.transactions = [];
         this.totalAmount = 0;
-        this.wakeLock = null;
         
-        // Simple duplicate prevention
+        // Simple state
+        this.isInBackground = false;
         this.lastTransactionId = '';
         this.lastTransactionTime = 0;
+        this.isSpeaking = false;
         
         // Voice settings
         this.voices = [];
         this.selectedVoice = 'auto';
         this.voiceSpeed = 0.8;
         this.voicePitch = 1.0;
-        
-        // Background mode
-        this.isInBackground = false;
-        this.isSpeaking = false;
-        
-        // Pre-recorded audio for mobile background (fallback)
-        this.audioFiles = {};
         
         // Từ điển phát âm ngân hàng
         this.bankPronunciations = {
@@ -65,443 +59,335 @@ class BankTingTing {
             'PVCOMBANK': 'pê vê com băng'
         };
         
+        console.log('🏗️ BankTingTing constructor called');
         this.init();
     }
     
     init() {
-        this.connectSocket();
-        this.setupEventListeners();
-        this.loadVoices();
-        this.requestNotificationPermission();
-        this.setupServiceWorker();
-        this.setupBackgroundMode();
-        this.preventSleep();
-        this.setupUserInteractionMaintenance();
-    }
-    
-    async setupServiceWorker() {
-        if ('serviceWorker' in navigator) {
-            try {
-                const registration = await navigator.serviceWorker.register('/sw.js');
-                console.log('✅ Service Worker registered');
-                
-                // Listen for messages from Service Worker
-                navigator.serviceWorker.addEventListener('message', (event) => {
-                    this.handleServiceWorkerMessage(event.data);
-                });
-                
-            } catch (error) {
-                console.error('❌ Service Worker registration failed:', error);
-            }
-        }
-    }
-    
-    handleServiceWorkerMessage(message) {
-        console.log('📨 SW Message received:', message);
+        console.log('🚀 BankTingTing init started');
         
-        if (message.type === 'PLAY_SOUND' && message.data) {
-            console.log('🗣️ Processing SW message for desktop background');
+        try {
+            this.connectSocket();
+            this.setupEventListeners();
+            this.loadVoices();
+            this.requestNotificationPermission();
+            this.setupVisibilityChange();
+            this.preventSleep();
             
-            // Play sound
-            this.playNotificationSound();
-            
-            // TTS for desktop background
-            if (this.ttsEnabled) {
-                this.executeTTS(message.data, (success) => {
-                    console.log('🗣️ Desktop background TTS result:', success);
-                });
-            }
+            console.log('✅ BankTingTing init completed successfully');
+        } catch (error) {
+            console.error('❌ BankTingTing init failed:', error);
         }
     }
     
-    setupBackgroundMode() {
-        // Simple background detection without Service Worker conflicts
+    setupVisibilityChange() {
         document.addEventListener('visibilitychange', () => {
             this.isInBackground = document.hidden;
-            
-            if (this.isInBackground) {
-                console.log('📱 App in background mode');
-                this.setupBackgroundFallback();
-            } else {
-                console.log('📱 App in foreground mode');
-                this.stopBackgroundFallback();
-            }
+            console.log('👁️ Visibility changed. Background:', this.isInBackground);
         });
-        
-        console.log('🌙 Background mode setup complete');
-    }
-    
-    setupBackgroundFallback() {
-        // CRITICAL: CHỈ DÙNG POLLING CHO MOBILE, KHÔNG DÙNG CHO DESKTOP
-        const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-        const isPWA = window.matchMedia('(display-mode: standalone)').matches;
-        
-        if (isMobile || isPWA) {
-            console.log('📱 Starting background polling for mobile/PWA');
-            this.startBackgroundPolling();
-        } else {
-            console.log('💻 Desktop browser - relying on Service Worker only');
-            // Desktop sẽ chỉ dùng Service Worker, không polling
-        }
-        
-        // Keep audio context alive for all platforms
-        this.keepAudioContextAlive();
-    }
-    
-    stopBackgroundFallback() {
-        if (this.backgroundInterval) {
-            clearInterval(this.backgroundInterval);
-            this.backgroundInterval = null;
-        }
-    }
-    
-    startBackgroundPolling() {
-        if (this.backgroundInterval) {
-            clearInterval(this.backgroundInterval);
-        }
-        
-        this.backgroundInterval = setInterval(() => {
-            this.checkForNewTransactions();
-        }, 15000); // Every 15 seconds
-    }
-    
-    async checkForNewTransactions() {
-        if (!this.isInBackground) return;
-        
-        try {
-            const response = await fetch('/api/logs');
-            const data = await response.json();
-            
-            if (data.recent_transactions && data.recent_transactions.length > 0) {
-                const latest = data.recent_transactions[0];
-                const now = Date.now();
-                const transactionTime = new Date(latest.time).getTime();
-                const diffInSeconds = (now - transactionTime) / 1000;
-                
-                // Only process very recent transactions (20 seconds)
-                if (diffInSeconds < 20) {
-                    const transactionId = latest.transaction_id || latest.id || `${latest.bank}_${latest.amount}_${transactionTime}`;
-                    
-                    // Simple duplicate check
-                    if (transactionId !== this.lastTransactionId || (now - this.lastTransactionTime) > 10000) {
-                        this.lastTransactionId = transactionId;
-                        this.lastTransactionTime = now;
-                        
-                        console.log('🔔 Background polling detected transaction!');
-                        
-                        // Play sound
-                        this.playNotificationSound();
-                        
-                        // Try mobile-optimized TTS
-                        if (this.ttsEnabled) {
-                            this.mobileBackgroundTTS({
-                                amount: latest.amount,
-                                bank_brand: latest.bank,
-                                content: latest.content
-                            });
-                        }
-                        
-                        // System notification
-                        this.showSystemNotification({
-                            amount: latest.amount,
-                            bank_brand: latest.bank,
-                            content: latest.content
-                        });
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('❌ Background polling failed:', error);
-        }
-    }
-    
-    mobileBackgroundTTS(data) {
-        // Mobile-specific TTS approach with multiple fallbacks
-        console.log('📱 Attempting mobile background TTS');
-        
-        // Method 1: Try with maintained user interaction
-        this.triggerUserInteraction(() => {
-            this.executeTTS(data, (success) => {
-                if (success) {
-                    console.log('✅ Mobile background TTS success with user interaction');
-                } else {
-                    console.log('❌ Mobile background TTS failed - trying audio fallback');
-                    this.playPreRecordedAudio(data);
-                }
-            });
-        });
-    }
-    
-    setupUserInteractionMaintenance() {
-        // Maintain user interaction state for mobile TTS
-        let lastInteraction = Date.now();
-        
-        // Listen for any user interactions
-        const updateInteraction = () => {
-            lastInteraction = Date.now();
-        };
-        
-        ['touchstart', 'touchend', 'click', 'keydown'].forEach(event => {
-            document.addEventListener(event, updateInteraction, { passive: true });
-        });
-        
-        // Periodically trigger minimal interactions in background
-        setInterval(() => {
-            if (this.isInBackground && (Date.now() - lastInteraction) > 30000) {
-                this.maintainInteractionState();
-            }
-        }, 25000);
-    }
-    
-    maintainInteractionState() {
-        try {
-            // Create minimal audio to maintain interaction state
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
-            
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            
-            gainNode.gain.setValueAtTime(0.001, audioContext.currentTime); // Almost silent
-            oscillator.frequency.setValueAtTime(1, audioContext.currentTime);
-            
-            oscillator.start(audioContext.currentTime);
-            oscillator.stop(audioContext.currentTime + 0.001);
-            
-            setTimeout(() => {
-                audioContext.close();
-            }, 100);
-        } catch (e) {
-            // Silently fail
-        }
-    }
-    
-    triggerUserInteraction(callback) {
-        // Try to simulate user interaction context
-        setTimeout(() => {
-            callback();
-        }, 50);
-    }
-    
-    playPreRecordedAudio(data) {
-        // Fallback: Play pre-recorded announcement
-        console.log('🔊 Playing pre-recorded audio fallback');
-        
-        try {
-            // Create simple beep pattern as fallback
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            
-            // Success beep pattern
-            const frequencies = [800, 900, 1000];
-            frequencies.forEach((freq, index) => {
-                setTimeout(() => {
-                    const osc = audioContext.createOscillator();
-                    const gain = audioContext.createGain();
-                    
-                    osc.connect(gain);
-                    gain.connect(audioContext.destination);
-                    
-                    osc.frequency.setValueAtTime(freq, audioContext.currentTime);
-                    gain.gain.setValueAtTime(0.2, audioContext.currentTime);
-                    gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
-                    
-                    osc.start(audioContext.currentTime);
-                    osc.stop(audioContext.currentTime + 0.3);
-                }, index * 400);
-            });
-            
-        } catch (error) {
-            console.error('❌ Audio fallback failed:', error);
-        }
-    }
-    
-    keepAudioContextAlive() {
-        // Keep app alive in background
-        setInterval(() => {
-            if (this.isInBackground) {
-                this.maintainInteractionState();
-            }
-        }, 30000);
     }
     
     connectSocket() {
-        // Clean up existing connection
-        if (this.socket) {
-            this.socket.disconnect();
+        console.log('🔌 Connecting socket...');
+        
+        try {
+            this.socket = io({
+                forceNew: true,
+                reconnection: true,
+                reconnectionDelay: 1000,
+                reconnectionAttempts: 5,
+                timeout: 10000
+            });
+            
+            this.socket.on('connect', () => {
+                this.isConnected = true;
+                this.updateConnectionStatus(true);
+                console.log('✅ Socket connected successfully!');
+            });
+            
+            this.socket.on('disconnect', () => {
+                this.isConnected = false;
+                this.updateConnectionStatus(false);
+                console.log('❌ Socket disconnected!');
+            });
+            
+            this.socket.on('new_transaction', (data) => {
+                console.log('📨 SOCKET: new_transaction event received:', data);
+                this.handleNewTransaction(data);
+            });
+            
+            console.log('✅ Socket setup completed');
+        } catch (error) {
+            console.error('❌ Socket setup failed:', error);
         }
-        
-        this.socket = io({
-            forceNew: true,
-            reconnection: true,
-            reconnectionDelay: 1000,
-            reconnectionAttempts: 5,
-            timeout: 10000
-        });
-        
-        this.socket.on('connect', () => {
-            this.isConnected = true;
-            this.updateConnectionStatus(true);
-            console.log('✅ Socket connected!');
-        });
-        
-        this.socket.on('disconnect', () => {
-            this.isConnected = false;
-            this.updateConnectionStatus(false);
-            console.log('❌ Socket disconnected!');
-        });
-        
-        this.socket.on('new_transaction', (data) => {
-            this.handleNewTransaction(data);
-        });
     }
     
     handleNewTransaction(data) {
+        console.log('💰 ===== HANDLING NEW TRANSACTION =====');
+        console.log('💰 Data:', data);
+        console.log('💰 Background mode:', this.isInBackground);
+        console.log('💰 Sound enabled:', this.soundEnabled);
+        console.log('💰 TTS enabled:', this.ttsEnabled);
+        
         const now = Date.now();
         const transactionId = data.transaction_id || data.id || `${data.bank_brand}_${data.amount}_${now}`;
         
-        console.log('⚡ Socket transaction received. Background:', this.isInBackground, 'Data:', data);
-        
         // Simple duplicate check
-        if (transactionId === this.lastTransactionId && (now - this.lastTransactionTime) < 5000) {
-            console.log('🚫 Duplicate ignored');
+        if (transactionId === this.lastTransactionId && (now - this.lastTransactionTime) < 3000) {
+            console.log('🚫 DUPLICATE DETECTED - SKIPPING:', transactionId);
             return;
         }
         
         this.lastTransactionId = transactionId;
         this.lastTransactionTime = now;
         
-        // Always add to UI
+        console.log('✅ Transaction accepted, processing...');
+        
+        // Add to UI
         this.addTransactionToUI(data);
         
-        if (this.isInBackground) {
-            console.log('🌙 Transaction in background');
-            
-            // DESKTOP: Use Service Worker
-            const isDesktop = !/Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-            
-            if (isDesktop && navigator.serviceWorker && navigator.serviceWorker.controller) {
-                console.log('💻 Sending to Service Worker for desktop background processing');
-                navigator.serviceWorker.controller.postMessage({
-                    type: 'NEW_TRANSACTION',
-                    isBackground: true,
-                    data: data
-                });
-            } else {
-                console.log('📱 Mobile background - handled by polling');
-                // Mobile sẽ được handle bởi background polling
-            }
-            return;
-        }
-        
-        // FOREGROUND: Process normally
-        console.log('💰 Processing transaction in foreground');
-        
-        // Sound notification
+        // Play sound
         if (this.soundEnabled) {
+            console.log('🔊 Playing notification sound...');
             this.playNotificationSound();
+        } else {
+            console.log('🔇 Sound disabled, skipping...');
         }
         
-        // Voice notification
+        // TTS
         if (this.ttsEnabled) {
+            console.log('🗣️ TTS enabled, attempting to speak...');
             setTimeout(() => {
-                this.executeTTS(data, () => {});
-            }, 300);
+                this.speakNotification(data);
+            }, 500);
+        } else {
+            console.log('🔇 TTS disabled, skipping...');
         }
         
-        // System notification & popup
+        // System notification
         this.showSystemNotification(data);
         this.showNotificationPopup(data);
         
         // Vibrate
         if (navigator.vibrate) {
             navigator.vibrate([200, 100, 200]);
+            console.log('📳 Vibration triggered');
         }
+        
+        console.log('💰 ===== TRANSACTION HANDLING COMPLETE =====');
     }
     
-    executeTTS(data, callback) {
-        if (!window.speechSynthesis || this.isSpeaking) {
-            callback(false);
+    speakNotification(data) {
+        console.log('🗣️ ===== SPEAK NOTIFICATION CALLED =====');
+        console.log('🗣️ Data:', data);
+        console.log('🗣️ speechSynthesis available:', !!window.speechSynthesis);
+        console.log('🗣️ Is speaking:', this.isSpeaking);
+        console.log('🗣️ Background mode:', this.isInBackground);
+        
+        if (!window.speechSynthesis) {
+            console.log('❌ speechSynthesis not available');
+            return;
+        }
+        
+        if (this.isSpeaking) {
+            console.log('🚫 Already speaking, skipping...');
             return;
         }
         
         try {
             this.isSpeaking = true;
             
-            // Force stop any existing speech
+            // Cancel any existing speech
             window.speechSynthesis.cancel();
+            console.log('🔄 Cancelled existing speech');
             
-            // Delay to ensure clean state
+            const bankName = this.getBankPronunciation(data.bank_brand);
+            const amount = this.formatMoney(data.amount);
+            const text = `${bankName} nhận được ${amount} đồng. Cám ơn quý Khách.`;
+            
+            console.log('🗣️ Text to speak:', text);
+            console.log('🗣️ Voice speed:', this.voiceSpeed);
+            console.log('🗣️ Voice pitch:', this.voicePitch);
+            
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'vi-VN';
+            utterance.rate = this.voiceSpeed;
+            utterance.pitch = this.voicePitch;
+            utterance.volume = 1.0;
+            
+            const selectedVoice = this.getSelectedVoice();
+            if (selectedVoice) {
+                utterance.voice = selectedVoice;
+                console.log('🗣️ Using voice:', selectedVoice.name);
+            } else {
+                console.log('🗣️ Using default voice');
+            }
+            
+            utterance.onstart = () => {
+                console.log('🗣️ ✅ Speech started');
+            };
+            
+            utterance.onend = () => {
+                console.log('🗣️ ✅ Speech ended successfully');
+                this.isSpeaking = false;
+            };
+            
+            utterance.onerror = (event) => {
+                console.error('🗣️ ❌ Speech error:', event.error);
+                this.isSpeaking = false;
+            };
+            
+            // Timeout fallback
             setTimeout(() => {
-                const bankName = this.getBankPronunciation(data.bank_brand);
-                const amount = this.formatMoney(data.amount);
-                const text = `${bankName} nhận được ${amount} đồng. Cám ơn quý Khách.`;
-                
-                console.log('🗣️ Executing TTS:', text);
-                
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.lang = 'vi-VN';
-                utterance.rate = this.voiceSpeed;
-                utterance.pitch = this.voicePitch;
-                utterance.volume = 1.0;
-                
-                const selectedVoice = this.getSelectedVoice();
-                if (selectedVoice) {
-                    utterance.voice = selectedVoice;
+                if (this.isSpeaking) {
+                    console.log('🗣️ ⏰ Speech timeout, forcing end');
+                    this.isSpeaking = false;
+                    window.speechSynthesis.cancel();
                 }
-                
-                let completed = false;
-                
-                utterance.onend = () => {
-                    this.isSpeaking = false;
-                    if (!completed) {
-                        completed = true;
-                        callback(true);
-                    }
-                };
-                
-                utterance.onerror = (event) => {
-                    this.isSpeaking = false;
-                    console.error('❌ TTS error:', event.error);
-                    if (!completed) {
-                        completed = true;
-                        callback(false);
-                    }
-                };
-                
-                // Timeout fallback
-                setTimeout(() => {
-                    if (!completed) {
-                        this.isSpeaking = false;
-                        completed = true;
-                        callback(false);
-                    }
-                }, 8000);
-                
-                // Execute TTS
-                window.speechSynthesis.speak(utterance);
-                
-            }, 200);
+            }, 10000);
+            
+            console.log('🗣️ 🚀 Starting speech...');
+            window.speechSynthesis.speak(utterance);
             
         } catch (error) {
+            console.error('🗣️ ❌ Speech failed with error:', error);
             this.isSpeaking = false;
-            console.error('❌ Execute TTS failed:', error);
-            callback(false);
         }
+        
+        console.log('🗣️ ===== SPEAK NOTIFICATION END =====');
+    }
+    
+    playNotificationSound() {
+        console.log('🔊 ===== PLAYING NOTIFICATION SOUND =====');
+        
+        try {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            console.log('🔊 AudioContext created');
+            
+            // TING 1
+            const osc1 = audioContext.createOscillator();
+            const gain1 = audioContext.createGain();
+            osc1.connect(gain1);
+            gain1.connect(audioContext.destination);
+            
+            osc1.frequency.setValueAtTime(800, audioContext.currentTime);
+            gain1.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gain1.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+            
+            osc1.start(audioContext.currentTime);
+            osc1.stop(audioContext.currentTime + 0.2);
+            
+            console.log('🔊 First TING scheduled');
+            
+            // TING 2
+            setTimeout(() => {
+                const osc2 = audioContext.createOscillator();
+                const gain2 = audioContext.createGain();
+                osc2.connect(gain2);
+                gain2.connect(audioContext.destination);
+                
+                osc2.frequency.setValueAtTime(900, audioContext.currentTime);
+                gain2.gain.setValueAtTime(0.3, audioContext.currentTime);
+                gain2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+                
+                osc2.start(audioContext.currentTime);
+                osc2.stop(audioContext.currentTime + 0.2);
+                
+                console.log('🔊 Second TING scheduled');
+            }, 100);
+            
+            console.log('🔊 ✅ TING TING sound completed!');
+        } catch (error) {
+            console.error('🔊 ❌ Sound failed:', error);
+        }
+        
+        console.log('🔊 ===== SOUND COMPLETE =====');
+    }
+    
+    getBankPronunciation(bankCode) {
+        const pronunciation = this.bankPronunciations[bankCode] || 
+                            this.bankPronunciations[bankCode?.toUpperCase()] ||
+                            bankCode?.toLowerCase().replace(/bank/gi, 'băng') || 
+                            'ngân hàng';
+        
+        console.log('🏦 Bank pronunciation:', bankCode, '→', pronunciation);
+        return pronunciation;
     }
     
     setupEventListeners() {
-        // Remove existing listeners first
-        this.cleanupEventListeners();
+        console.log('📝 Setting up event listeners...');
         
-        // Add new listeners
-        document.getElementById('toggleSound')?.addEventListener('click', this.toggleSound.bind(this));
-        document.getElementById('toggleTTS')?.addEventListener('click', this.toggleTTS.bind(this));
-        document.getElementById('testNotification')?.addEventListener('click', this.sendTestNotification.bind(this));
-        document.getElementById('voiceSelect')?.addEventListener('change', this.onVoiceChange.bind(this));
-        document.getElementById('voiceSpeed')?.addEventListener('change', this.onSpeedChange.bind(this));
-        document.getElementById('voicePitch')?.addEventListener('change', this.onPitchChange.bind(this));
-        document.getElementById('testVoice')?.addEventListener('click', this.testVoice.bind(this));
+        try {
+            // Clean previous listeners
+            this.cleanupEventListeners();
+            
+            // Toggle sound
+            const soundBtn = document.getElementById('toggleSound');
+            if (soundBtn) {
+                soundBtn.addEventListener('click', () => {
+                    this.soundEnabled = !this.soundEnabled;
+                    this.updateSoundButton();
+                    console.log('🔊 Sound toggled:', this.soundEnabled);
+                });
+            }
+            
+            // Toggle TTS
+            const ttsBtn = document.getElementById('toggleTTS');
+            if (ttsBtn) {
+                ttsBtn.addEventListener('click', () => {
+                    this.ttsEnabled = !this.ttsEnabled;
+                    this.updateTTSButton();
+                    console.log('🗣️ TTS toggled:', this.ttsEnabled);
+                });
+            }
+            
+            // Test notification
+            const testBtn = document.getElementById('testNotification');
+            if (testBtn) {
+                testBtn.addEventListener('click', () => {
+                    console.log('🧪 Test button clicked');
+                    this.sendTestNotification();
+                });
+            }
+            
+            // Voice settings
+            const voiceSelect = document.getElementById('voiceSelect');
+            if (voiceSelect) {
+                voiceSelect.addEventListener('change', (e) => {
+                    this.selectedVoice = e.target.value;
+                    console.log('🎭 Voice changed:', this.selectedVoice);
+                });
+            }
+            
+            const speedSelect = document.getElementById('voiceSpeed');
+            if (speedSelect) {
+                speedSelect.addEventListener('change', (e) => {
+                    this.voiceSpeed = parseFloat(e.target.value);
+                    console.log('⚡ Speed changed:', this.voiceSpeed);
+                });
+            }
+            
+            const pitchSelect = document.getElementById('voicePitch');
+            if (pitchSelect) {
+                pitchSelect.addEventListener('change', (e) => {
+                    this.voicePitch = parseFloat(e.target.value);
+                    console.log('🎵 Pitch changed:', this.voicePitch);
+                });
+            }
+            
+            // Test voice
+            const testVoiceBtn = document.getElementById('testVoice');
+            if (testVoiceBtn) {
+                testVoiceBtn.addEventListener('click', () => {
+                    console.log('🎤 Test voice button clicked');
+                    this.testVoice();
+                });
+            }
+            
+            console.log('✅ Event listeners setup completed');
+        } catch (error) {
+            console.error('❌ Event listeners setup failed:', error);
+        }
     }
     
     cleanupEventListeners() {
@@ -509,35 +395,14 @@ class BankTingTing {
         buttons.forEach(id => {
             const element = document.getElementById(id);
             if (element) {
-                element.replaceWith(element.cloneNode(true));
+                const newElement = element.cloneNode(true);
+                element.parentNode?.replaceChild(newElement, element);
             }
         });
     }
     
-    toggleSound() {
-        this.soundEnabled = !this.soundEnabled;
-        this.updateSoundButton();
-    }
-    
-    toggleTTS() {
-        this.ttsEnabled = !this.ttsEnabled;
-        this.updateTTSButton();
-    }
-    
-    onVoiceChange(e) {
-        this.selectedVoice = e.target.value;
-    }
-    
-    onSpeedChange(e) {
-        this.voiceSpeed = parseFloat(e.target.value);
-    }
-    
-    onPitchChange(e) {
-        this.voicePitch = parseFloat(e.target.value);
-    }
-    
     testVoice() {
-        if (this.isSpeaking) return;
+        console.log('🎤 ===== TEST VOICE CALLED =====');
         
         const testData = {
             amount: 500000,
@@ -545,30 +410,20 @@ class BankTingTing {
             content: 'Test giọng đọc'
         };
         
-        this.executeTTS(testData, (success) => {
-            console.log('Test voice result:', success);
-        });
-    }
-    
-    addTransactionToUI(data) {
-        this.transactions.unshift(data);
-        if (this.transactions.length > 50) {
-            this.transactions = this.transactions.slice(0, 50);
-        }
-        
-        if (data.type === 'credit') {
-            this.totalAmount += data.amount;
-        }
-        
-        this.updateTransactionsList();
-        this.updateStats();
+        this.speakNotification(testData);
     }
     
     loadVoices() {
-        if (!window.speechSynthesis) return;
+        console.log('🗣️ Loading voices...');
+        
+        if (!window.speechSynthesis) {
+            console.log('❌ speechSynthesis not available');
+            return;
+        }
         
         const loadVoicesFunction = () => {
             this.voices = window.speechSynthesis.getVoices();
+            console.log('🗣️ Loaded voices:', this.voices.length);
             this.populateVoiceSelector();
         };
         
@@ -580,12 +435,13 @@ class BankTingTing {
         const selector = document.getElementById('voiceSelect');
         if (!selector) return;
         
-        // Add Vietnamese voices
         const vietnameseVoices = this.voices.filter(voice => 
             voice.lang.includes('vi') || 
             voice.name.toLowerCase().includes('vietnam') ||
             voice.name.toLowerCase().includes('vietnamese')
         );
+        
+        console.log('🇻🇳 Vietnamese voices found:', vietnameseVoices.length);
         
         vietnameseVoices.forEach(voice => {
             const option = document.createElement('option');
@@ -593,8 +449,6 @@ class BankTingTing {
             option.textContent = `🇻🇳 ${voice.name}`;
             selector.appendChild(option);
         });
-        
-        console.log('🗣️ Found', vietnameseVoices.length, 'Vietnamese voices');
     }
     
     getSelectedVoice() {
@@ -606,6 +460,22 @@ class BankTingTing {
         }
         
         return this.voices.find(voice => voice.name === this.selectedVoice) || null;
+    }
+    
+    addTransactionToUI(data) {
+        console.log('📱 Adding transaction to UI:', data);
+        
+        this.transactions.unshift(data);
+        if (this.transactions.length > 50) {
+            this.transactions = this.transactions.slice(0, 50);
+        }
+        
+        if (data.type === 'credit') {
+            this.totalAmount += data.amount;
+        }
+        
+        this.updateTransactionsList();
+        this.updateStats();
     }
     
     updateConnectionStatus(isConnected) {
@@ -678,51 +548,6 @@ class BankTingTing {
         }, 4000);
     }
     
-    playNotificationSound() {
-        try {
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            
-            // TING 1
-            const osc1 = audioContext.createOscillator();
-            const gain1 = audioContext.createGain();
-            osc1.connect(gain1);
-            gain1.connect(audioContext.destination);
-            
-            osc1.frequency.setValueAtTime(800, audioContext.currentTime);
-            gain1.gain.setValueAtTime(0.3, audioContext.currentTime);
-            gain1.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
-            
-            osc1.start(audioContext.currentTime);
-            osc1.stop(audioContext.currentTime + 0.2);
-            
-            // TING 2
-            setTimeout(() => {
-                const osc2 = audioContext.createOscillator();
-                const gain2 = audioContext.createGain();
-                osc2.connect(gain2);
-                gain2.connect(audioContext.destination);
-                
-                osc2.frequency.setValueAtTime(900, audioContext.currentTime);
-                gain2.gain.setValueAtTime(0.3, audioContext.currentTime);
-                gain2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
-                
-                osc2.start(audioContext.currentTime);
-                osc2.stop(audioContext.currentTime + 0.2);
-            }, 100);
-            
-            console.log('🔊 TING TING played!');
-        } catch (error) {
-            console.error('❌ Sound failed:', error);
-        }
-    }
-    
-    getBankPronunciation(bankCode) {
-        return this.bankPronunciations[bankCode] || 
-               this.bankPronunciations[bankCode?.toUpperCase()] ||
-               bankCode?.toLowerCase().replace(/bank/gi, 'băng') || 
-               'ngân hàng';
-    }
-    
     async requestNotificationPermission() {
         if ('Notification' in window && Notification.permission === 'default') {
             const permission = await Notification.requestPermission();
@@ -766,18 +591,21 @@ class BankTingTing {
     }
     
     async sendTestNotification() {
+        console.log('🧪 ===== SENDING TEST NOTIFICATION =====');
+        
         try {
-            console.log('🧪 Sending test notification...');
             const response = await fetch('/test-notification', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' }
             });
             
             if (response.ok) {
-                console.log('✅ Test notification sent');
+                console.log('✅ Test notification request sent successfully');
+            } else {
+                console.error('❌ Test notification request failed:', response.status);
             }
         } catch (error) {
-            console.error('❌ Test failed:', error);
+            console.error('❌ Test notification error:', error);
         }
     }
     
@@ -785,14 +613,7 @@ class BankTingTing {
         if ('wakeLock' in navigator) {
             try {
                 this.wakeLock = await navigator.wakeLock.request('screen');
-                console.log('🔒 Wake lock active');
-                
-                document.addEventListener('visibilitychange', async () => {
-                    if (document.visibilityState === 'visible' && this.wakeLock?.released) {
-                        this.wakeLock = await navigator.wakeLock.request('screen');
-                    }
-                });
-                
+                console.log('🔒 Wake lock activated');
             } catch (err) {
                 console.log('❌ Wake lock failed:', err);
             }
@@ -812,19 +633,28 @@ class BankTingTing {
     }
     
     destroy() {
+        console.log('🗑️ Destroying BankTingTing instance');
         if (this.socket) this.socket.disconnect();
         if (this.wakeLock) this.wakeLock.release();
-        if (this.backgroundInterval) clearInterval(this.backgroundInterval);
     }
 }
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('📄 DOM Content Loaded');
+    
     if (window.bankTingTing) {
+        console.log('🗑️ Destroying existing instance');
         window.bankTingTing.destroy();
     }
     
+    console.log('🚀 Creating new BankTingTing instance');
     window.bankTingTing = new BankTingTing();
 });
 
-console.log('🚀 BANK-TING-TING Single Source Solution Ready!');
+// Global error handler
+window.addEventListener('error', (event) => {
+    console.error('💥 Global error:', event.error);
+});
+
+console.log('📝 BankTingTing script loaded successfully!');
