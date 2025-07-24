@@ -7,7 +7,11 @@ class BankTingTing {
         this.transactions = [];
         this.totalAmount = 0;
         this.wakeLock = null;
-        this.processedTransactions = new Set(); // Tránh duplicate
+        
+        // Duplicate prevention - IMPROVED
+        this.processedTransactions = new Set();
+        this.lastTransactionId = null;
+        this.lastTransactionTime = 0;
         
         // Voice settings
         this.voices = [];
@@ -16,10 +20,13 @@ class BankTingTing {
         this.voicePitch = 1.0;
         
         // Background settings
-        this.backgroundAudio = null;
-        this.heartbeatInterval = null;
         this.backgroundCheckInterval = null;
-        this.lastNotificationTime = 0;
+        this.heartbeatInterval = null;
+        this.isInBackground = false;
+        this.backgroundTTSQueue = [];
+        
+        // Mobile detection
+        this.isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
         
         // Từ điển phát âm ngân hàng
         this.bankPronunciations = {
@@ -72,6 +79,8 @@ class BankTingTing {
         this.setupServiceWorker();
         this.preventSleep();
         this.startBackgroundMode();
+        
+        console.log('🚀 BANK-TING-TING initialized - Mobile:', this.isMobile);
     }
     
     async setupServiceWorker() {
@@ -93,58 +102,71 @@ class BankTingTing {
     
     handleServiceWorkerMessage(message) {
         if (message.type === 'PLAY_SOUND' && message.data) {
-            // Tránh duplicate notifications
-            const transactionId = message.data.transaction_id || message.data.id;
-            if (transactionId && this.processedTransactions.has(transactionId)) {
+            const transactionId = this.getTransactionId(message.data);
+            
+            // STRONGER duplicate prevention
+            if (this.isDuplicateTransaction(transactionId, message.data.amount)) {
+                console.log('🚫 Duplicate SW message ignored:', transactionId);
                 return;
             }
             
-            if (transactionId) {
-                this.processedTransactions.add(transactionId);
-            }
+            this.markTransactionProcessed(transactionId);
             
+            console.log('🔊 SW triggered sound + TTS');
             this.playNotificationSound();
             
+            // MOBILE TTS SOLUTION: Force TTS khi app return foreground
             if (this.ttsEnabled) {
-                setTimeout(() => {
-                    this.speakCustomNotification(message.data);
-                }, 300);
+                if (this.isMobile && this.isInBackground) {
+                    this.backgroundTTSQueue.push(message.data);
+                    console.log('📱 Mobile TTS queued for foreground');
+                } else {
+                    setTimeout(() => {
+                        this.speakCustomNotification(message.data);
+                    }, 300);
+                }
             }
         }
     }
     
     startBackgroundMode() {
-        // Clear existing intervals để tránh duplicate
-        if (this.heartbeatInterval) {
-            clearInterval(this.heartbeatInterval);
-        }
-        if (this.backgroundCheckInterval) {
-            clearInterval(this.backgroundCheckInterval);
-        }
+        // Clear existing intervals
+        this.clearIntervals();
         
-        // Heartbeat interval - CHỈ KHI CẦN
+        // Heartbeat - ít thường xuyên hơn
         this.heartbeatInterval = setInterval(() => {
             if (this.socket && this.socket.connected) {
                 this.socket.emit('heartbeat', { timestamp: Date.now() });
             }
-        }, 30000); // 30 giây thay vì 25 giây
+        }, 45000); // 45 giây
         
-        // Background check - CHỈ KHI Ở BACKGROUND
+        // Background check - CHỈ KHI THỰC SỰ CẦN
         this.backgroundCheckInterval = setInterval(() => {
-            if (document.hidden && this.isConnected) {
+            if (this.isInBackground && this.isConnected) {
                 this.checkBackgroundNotifications();
             }
-        }, 15000); // 15 giây thay vì 10 giây để giảm spam
+        }, 20000); // 20 giây để giảm spam
         
         console.log('🌙 Background mode started');
+    }
+    
+    clearIntervals() {
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = null;
+        }
+        if (this.backgroundCheckInterval) {
+            clearInterval(this.backgroundCheckInterval);
+            this.backgroundCheckInterval = null;
+        }
     }
     
     async checkBackgroundNotifications() {
         try {
             const now = Date.now();
             
-            // Tránh check quá thường xuyên
-            if (now - this.lastNotificationTime < 10000) {
+            // Rate limiting - tránh spam
+            if (now - this.lastTransactionTime < 8000) {
                 return;
             }
             
@@ -156,34 +178,20 @@ class BankTingTing {
                 const transactionTime = new Date(latest.time);
                 const diffInSeconds = (now - transactionTime.getTime()) / 1000;
                 
-                // CHỈ XỬ LÝ GIAO DỊCH MỚI (trong 20 giây)
-                if (diffInSeconds < 20) {
-                    const transactionId = latest.transaction_id || latest.id || latest.time;
+                // CHỈ XỬ LÝ GIAO DỊCH RẤT MỚI (trong 15 giây)
+                if (diffInSeconds < 15) {
+                    const transactionId = this.getTransactionId(latest);
                     
-                    // Tránh duplicate
-                    if (this.processedTransactions.has(transactionId)) {
+                    if (this.isDuplicateTransaction(transactionId, latest.amount)) {
                         return;
                     }
                     
-                    this.processedTransactions.add(transactionId);
-                    this.lastNotificationTime = now;
+                    this.markTransactionProcessed(transactionId);
                     
                     console.log('🔔 Background notification:', latest);
                     
                     // Phát âm thanh
                     this.playNotificationSound();
-                    
-                    // Text-to-speech
-                    if (this.ttsEnabled) {
-                        setTimeout(() => {
-                            const fakeData = {
-                                amount: latest.amount,
-                                bank_brand: latest.bank,
-                                content: latest.content
-                            };
-                            this.speakCustomNotification(fakeData);
-                        }, 500);
-                    }
                     
                     // System notification
                     if (Notification.permission === 'granted') {
@@ -195,6 +203,24 @@ class BankTingTing {
                             silent: false
                         });
                     }
+                    
+                    // TTS cho mobile - queue nếu background
+                    if (this.ttsEnabled) {
+                        const fakeData = {
+                            amount: latest.amount,
+                            bank_brand: latest.bank,
+                            content: latest.content
+                        };
+                        
+                        if (this.isMobile && this.isInBackground) {
+                            this.backgroundTTSQueue.push(fakeData);
+                            console.log('📱 Background TTS queued');
+                        } else {
+                            setTimeout(() => {
+                                this.speakCustomNotification(fakeData);
+                            }, 500);
+                        }
+                    }
                 }
             }
         } catch (error) {
@@ -202,10 +228,51 @@ class BankTingTing {
         }
     }
     
+    // IMPROVED duplicate detection
+    getTransactionId(data) {
+        return data.transaction_id || 
+               data.id || 
+               data.referenceCode ||
+               `${data.amount}_${data.bank_brand}_${Date.now()}`;
+    }
+    
+    isDuplicateTransaction(transactionId, amount) {
+        const uniqueKey = `${transactionId}_${amount}`;
+        
+        if (this.processedTransactions.has(uniqueKey)) {
+            return true;
+        }
+        
+        // Time-based duplicate check (same amount within 5 seconds)
+        const now = Date.now();
+        if (this.lastTransactionId === transactionId && 
+            (now - this.lastTransactionTime) < 5000) {
+            return true;
+        }
+        
+        return false;
+    }
+    
+    markTransactionProcessed(transactionId) {
+        const now = Date.now();
+        const uniqueKey = `${transactionId}_${now}`;
+        
+        this.processedTransactions.add(uniqueKey);
+        this.lastTransactionId = transactionId;
+        this.lastTransactionTime = now;
+        
+        // Clean old processed transactions (keep only last 100)
+        if (this.processedTransactions.size > 100) {
+            const oldEntries = Array.from(this.processedTransactions).slice(0, 50);
+            oldEntries.forEach(entry => this.processedTransactions.delete(entry));
+        }
+    }
+    
     connectSocket() {
-        // Tránh multiple connections
+        // Disconnect existing connection
         if (this.socket) {
             this.socket.disconnect();
+            this.socket = null;
         }
         
         this.socket = io({
@@ -228,7 +295,7 @@ class BankTingTing {
             console.log('❌ Connection lost, attempting to reconnect...');
         });
         
-        // REAL-TIME TRANSACTION HANDLER
+        // REAL-TIME TRANSACTION HANDLER - IMPROVED
         this.socket.on('new_transaction', (data) => {
             console.log('⚡ REAL-TIME TRANSACTION RECEIVED:', data);
             this.handleNewTransaction(data);
@@ -240,18 +307,8 @@ class BankTingTing {
     }
     
     setupEventListeners() {
-        // Tránh duplicate listeners
-        const removeExistingListeners = () => {
-            const buttons = ['toggleSound', 'toggleTTS', 'testNotification', 'testVoice'];
-            buttons.forEach(id => {
-                const element = document.getElementById(id);
-                if (element) {
-                    element.replaceWith(element.cloneNode(true));
-                }
-            });
-        };
-        
-        removeExistingListeners();
+        // Cleanup existing listeners to prevent duplicates
+        this.removeExistingListeners();
         
         // Toggle sound
         document.getElementById('toggleSound').addEventListener('click', () => {
@@ -289,12 +346,38 @@ class BankTingTing {
             this.testVoice();
         });
         
-        // Page visibility change
+        // IMPROVED Page visibility change
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
+                this.isInBackground = true;
                 console.log('📱 App went to background');
             } else {
+                this.isInBackground = false;
                 console.log('📱 App returned to foreground');
+                
+                // MOBILE TTS SOLUTION: Play queued TTS
+                if (this.isMobile && this.backgroundTTSQueue.length > 0) {
+                    console.log('🗣️ Playing queued TTS for mobile:', this.backgroundTTSQueue.length);
+                    
+                    // Play the most recent TTS only
+                    const latestTTS = this.backgroundTTSQueue.pop();
+                    this.backgroundTTSQueue = []; // Clear queue
+                    
+                    setTimeout(() => {
+                        this.speakCustomNotification(latestTTS);
+                    }, 1000); // Wait 1 second for app to fully activate
+                }
+            }
+        });
+    }
+    
+    removeExistingListeners() {
+        const buttons = ['toggleSound', 'toggleTTS', 'testNotification', 'testVoice'];
+        buttons.forEach(id => {
+            const element = document.getElementById(id);
+            if (element) {
+                const newElement = element.cloneNode(true);
+                element.parentNode.replaceChild(newElement, element);
             }
         });
     }
@@ -318,7 +401,11 @@ class BankTingTing {
         if (!selector) return;
         
         // Keep default options
-        const existingOptions = selector.innerHTML;
+        const defaultOptions = Array.from(selector.querySelectorAll('option[value="auto"], option[value="default"]'));
+        selector.innerHTML = '';
+        defaultOptions.forEach(option => selector.appendChild(option));
+        
+        // Find Vietnamese voices
         const vietnameseVoices = this.voices.filter(voice => 
             voice.lang.includes('vi') || 
             voice.name.toLowerCase().includes('vietnam') ||
@@ -356,13 +443,15 @@ class BankTingTing {
     }
     
     handleNewTransaction(data) {
-        // Tránh duplicate processing
-        const transactionId = data.transaction_id || data.id || data.timestamp;
-        if (this.processedTransactions.has(transactionId)) {
+        const transactionId = this.getTransactionId(data);
+        
+        // STRONGER duplicate prevention
+        if (this.isDuplicateTransaction(transactionId, data.amount)) {
+            console.log('🚫 Duplicate transaction ignored:', transactionId);
             return;
         }
         
-        this.processedTransactions.add(transactionId);
+        this.markTransactionProcessed(transactionId);
         console.log('💰 Processing new transaction:', data);
         
         // Add to transactions list
@@ -388,11 +477,16 @@ class BankTingTing {
             this.playNotificationSound();
         }
         
-        // Text-to-speech với delay để tránh conflict
+        // Text-to-speech với improved handling
         if (this.ttsEnabled) {
-            setTimeout(() => {
-                this.speakCustomNotification(data);
-            }, 500);
+            if (this.isMobile && this.isInBackground) {
+                this.backgroundTTSQueue.push(data);
+                console.log('📱 TTS queued for mobile background');
+            } else {
+                setTimeout(() => {
+                    this.speakCustomNotification(data);
+                }, 600); // Longer delay để tránh conflict
+            }
         }
         
         // Show system notification
@@ -640,10 +734,11 @@ class BankTingTing {
     
     // Cleanup function
     destroy() {
-        if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
-        if (this.backgroundCheckInterval) clearInterval(this.backgroundCheckInterval);
+        this.clearIntervals();
         if (this.socket) this.socket.disconnect();
         if (this.wakeLock) this.wakeLock.release();
+        this.processedTransactions.clear();
+        this.backgroundTTSQueue = [];
     }
 }
 
