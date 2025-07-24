@@ -6,24 +6,12 @@ class BankTingTing {
         this.ttsEnabled = true;
         this.transactions = [];
         this.totalAmount = 0;
-        this.wakeLock = null;
-        
-        // Simple duplicate prevention
-        this.lastTransactionId = '';
-        this.lastTransactionTime = 0;
         
         // Voice settings
         this.voices = [];
         this.selectedVoice = 'auto';
         this.voiceSpeed = 0.8;
         this.voicePitch = 1.0;
-        
-        // Background mode
-        this.isInBackground = false;
-        this.backgroundInterval = null;
-        
-        // TTS state
-        this.isSpeaking = false;
         
         // Từ điển phát âm ngân hàng
         this.bankPronunciations = {
@@ -73,283 +61,22 @@ class BankTingTing {
         this.setupEventListeners();
         this.loadVoices();
         this.requestNotificationPermission();
-        this.setupServiceWorker();
         this.preventSleep();
-        this.setupBackgroundMode();
-    }
-    
-    async setupServiceWorker() {
-        if ('serviceWorker' in navigator) {
-            try {
-                const registration = await navigator.serviceWorker.register('/sw.js');
-                console.log('✅ Service Worker registered');
-                
-                // Kiểm tra navigator.serviceWorker.controller trước khi listen
-                if (navigator.serviceWorker.controller) {
-                    navigator.serviceWorker.addEventListener('message', (event) => {
-                        this.handleServiceWorkerMessage(event.data);
-                    });
-                }
-                
-            } catch (error) {
-                console.error('❌ Service Worker registration failed:', error);
-            }
-        }
-    }
-    
-    handleServiceWorkerMessage(message) {
-        console.log('📨 SW Message received:', message);
-        
-        if (message.type === 'PLAY_SOUND' && message.data) {
-            // FIX 1: CHỈ CHẠY TTS KHI Ở BACKGROUND
-            if (document.hidden === true) {
-                console.log('🗣️ Running TTS from Service Worker (background mode)');
-                
-                // Play sound
-                this.playNotificationSound();
-                
-                // TTS for background
-                if (this.ttsEnabled) {
-                    this.forceTTS(message.data, (success) => {
-                        console.log('🗣️ Background TTS result:', success);
-                    });
-                }
-            } else {
-                console.log('🚫 SW message ignored - tab is visible (foreground mode)');
-            }
-        }
-    }
-    
-    setupBackgroundMode() {
-        // Simple background detection
-        document.addEventListener('visibilitychange', () => {
-            this.isInBackground = document.hidden;
-            
-            if (this.isInBackground) {
-                console.log('📱 App in background - Starting background mode');
-                this.startBackgroundCheck();
-                this.keepAudioContextAlive();
-            } else {
-                console.log('📱 App in foreground - Stopping background mode');
-                this.stopBackgroundCheck();
-            }
-        });
-        
-        // Keep app alive in background
-        this.keepAudioContextAlive();
-        
-        console.log('🌙 Background mode setup complete');
-    }
-    
-    keepAudioContextAlive() {
-        // Simple approach to keep app alive
-        setInterval(() => {
-            if (this.isInBackground) {
-                try {
-                    // Create minimal audio context to keep app active
-                    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                    const oscillator = audioContext.createOscillator();
-                    const gainNode = audioContext.createGain();
-                    
-                    oscillator.connect(gainNode);
-                    gainNode.connect(audioContext.destination);
-                    
-                    gainNode.gain.setValueAtTime(0, audioContext.currentTime);
-                    oscillator.frequency.setValueAtTime(1, audioContext.currentTime);
-                    
-                    oscillator.start(audioContext.currentTime);
-                    oscillator.stop(audioContext.currentTime + 0.001);
-                    
-                    setTimeout(() => {
-                        audioContext.close();
-                    }, 100);
-                } catch (e) {
-                    // Silently fail
-                }
-            }
-        }, 25000); // Every 25 seconds
-    }
-    
-    startBackgroundCheck() {
-        if (this.backgroundInterval) {
-            clearInterval(this.backgroundInterval);
-        }
-        
-        this.backgroundInterval = setInterval(() => {
-            this.checkForNewTransactions();
-        }, 10000); // Every 10 seconds
-    }
-    
-    stopBackgroundCheck() {
-        if (this.backgroundInterval) {
-            clearInterval(this.backgroundInterval);
-            this.backgroundInterval = null;
-        }
-    }
-    
-    async checkForNewTransactions() {
-        if (!this.isInBackground) return;
-        
-        try {
-            const response = await fetch('/api/logs');
-            const data = await response.json();
-            
-            if (data.recent_transactions && data.recent_transactions.length > 0) {
-                const latest = data.recent_transactions[0];
-                const now = Date.now();
-                const transactionTime = new Date(latest.time).getTime();
-                const diffInSeconds = (now - transactionTime) / 1000;
-                
-                // Only process very recent transactions (30 seconds)
-                if (diffInSeconds < 30) {
-                    const transactionId = latest.transaction_id || latest.id || `${latest.bank}_${latest.amount}_${transactionTime}`;
-                    
-                    // Simple duplicate check
-                    if (transactionId !== this.lastTransactionId || (now - this.lastTransactionTime) > 10000) {
-                        this.lastTransactionId = transactionId;
-                        this.lastTransactionTime = now;
-                        
-                        console.log('🔔 Background transaction detected!');
-                        
-                        // Play sound
-                        this.playNotificationSound();
-                        
-                        // Try TTS with multiple attempts
-                        if (this.ttsEnabled) {
-                            this.attemptTTS({
-                                amount: latest.amount,
-                                bank_brand: latest.bank,
-                                content: latest.content
-                            }, 0);
-                        }
-                        
-                        // System notification
-                        this.showSystemNotification({
-                            amount: latest.amount,
-                            bank_brand: latest.bank,
-                            content: latest.content
-                        });
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('❌ Background check failed:', error);
-        }
-    }
-    
-    attemptTTS(data, attempt) {
-        if (attempt >= 5 || this.isSpeaking) return;
-        
-        const delays = [0, 500, 1000, 2000, 3000];
-        
-        setTimeout(() => {
-            this.forceTTS(data, (success) => {
-                if (!success && attempt < 4) {
-                    console.log(`🗣️ TTS attempt ${attempt + 1} failed, retrying...`);
-                    this.attemptTTS(data, attempt + 1);
-                } else if (success) {
-                    console.log('🗣️ TTS success in background!');
-                } else {
-                    console.log('🗣️ All TTS attempts failed');
-                }
-            });
-        }, delays[attempt]);
-    }
-    
-    forceTTS(data, callback) {
-        if (!window.speechSynthesis || this.isSpeaking) {
-            callback(false);
-            return;
-        }
-        
-        try {
-            this.isSpeaking = true;
-            
-            // Force stop any existing speech
-            window.speechSynthesis.cancel();
-            
-            // Small delay to ensure clean state
-            setTimeout(() => {
-                const bankName = this.getBankPronunciation(data.bank_brand);
-                const amount = this.formatMoney(data.amount);
-                const text = `${bankName} nhận được ${amount} đồng. Cám ơn quý Khách.`;
-                
-                console.log('🗣️ Force TTS:', text);
-                
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.lang = 'vi-VN';
-                utterance.rate = this.voiceSpeed;
-                utterance.pitch = this.voicePitch;
-                utterance.volume = 1.0; // Max volume for background
-                
-                const selectedVoice = this.getSelectedVoice();
-                if (selectedVoice) {
-                    utterance.voice = selectedVoice;
-                }
-                
-                let completed = false;
-                
-                utterance.onend = () => {
-                    this.isSpeaking = false;
-                    if (!completed) {
-                        completed = true;
-                        callback(true);
-                    }
-                };
-                
-                utterance.onerror = (event) => {
-                    this.isSpeaking = false;
-                    console.error('❌ TTS error:', event.error);
-                    if (!completed) {
-                        completed = true;
-                        callback(false);
-                    }
-                };
-                
-                // Timeout fallback
-                setTimeout(() => {
-                    if (!completed) {
-                        this.isSpeaking = false;
-                        completed = true;
-                        callback(false);
-                    }
-                }, 10000);
-                
-                window.speechSynthesis.speak(utterance);
-                
-            }, 100);
-            
-        } catch (error) {
-            this.isSpeaking = false;
-            console.error('❌ Force TTS failed:', error);
-            callback(false);
-        }
     }
     
     connectSocket() {
-        // Clean up existing connection
-        if (this.socket) {
-            this.socket.disconnect();
-        }
-        
-        this.socket = io({
-            forceNew: true,
-            reconnection: true,
-            reconnectionDelay: 1000,
-            reconnectionAttempts: 5,
-            timeout: 10000
-        });
+        this.socket = io();
         
         this.socket.on('connect', () => {
             this.isConnected = true;
             this.updateConnectionStatus(true);
-            console.log('✅ Connected!');
+            console.log('✅ Kết nối thành công!');
         });
         
         this.socket.on('disconnect', () => {
             this.isConnected = false;
             this.updateConnectionStatus(false);
-            console.log('❌ Disconnected!');
+            console.log('❌ Mất kết nối!');
         });
         
         this.socket.on('new_transaction', (data) => {
@@ -358,185 +85,218 @@ class BankTingTing {
     }
     
     setupEventListeners() {
-        // Remove existing listeners first
-        this.cleanupEventListeners();
+        // Toggle sound
+        document.getElementById('toggleSound').addEventListener('click', () => {
+            this.soundEnabled = !this.soundEnabled;
+            this.updateSoundButton();
+        });
         
-        // Add new listeners
-        document.getElementById('toggleSound')?.addEventListener('click', this.toggleSound.bind(this));
-        document.getElementById('toggleTTS')?.addEventListener('click', this.toggleTTS.bind(this));
-        document.getElementById('testNotification')?.addEventListener('click', this.sendTestNotification.bind(this));
-        document.getElementById('voiceSelect')?.addEventListener('change', this.onVoiceChange.bind(this));
-        document.getElementById('voiceSpeed')?.addEventListener('change', this.onSpeedChange.bind(this));
-        document.getElementById('voicePitch')?.addEventListener('change', this.onPitchChange.bind(this));
-        document.getElementById('testVoice')?.addEventListener('click', this.testVoice.bind(this));
-    }
-    
-    cleanupEventListeners() {
-        const buttons = ['toggleSound', 'toggleTTS', 'testNotification', 'testVoice', 'voiceSelect', 'voiceSpeed', 'voicePitch'];
-        buttons.forEach(id => {
-            const element = document.getElementById(id);
-            if (element) {
-                element.replaceWith(element.cloneNode(true));
+        // Toggle TTS
+        document.getElementById('toggleTTS').addEventListener('click', () => {
+            this.ttsEnabled = !this.ttsEnabled;
+            this.updateTTSButton();
+        });
+        
+        // Test notification
+        document.getElementById('testNotification').addEventListener('click', () => {
+            this.sendTestNotification();
+        });
+        
+        // Voice settings
+        document.getElementById('voiceSelect').addEventListener('change', (e) => {
+            this.selectedVoice = e.target.value;
+            console.log('🎭 Đã chọn giọng:', this.selectedVoice);
+        });
+        
+        document.getElementById('voiceSpeed').addEventListener('change', (e) => {
+            this.voiceSpeed = parseFloat(e.target.value);
+            console.log('⚡ Tốc độ đọc:', this.voiceSpeed);
+        });
+        
+        document.getElementById('voicePitch').addEventListener('change', (e) => {
+            this.voicePitch = parseFloat(e.target.value);
+            console.log('🎵 Cao độ giọng:', this.voicePitch);
+        });
+        
+        // Test voice
+        document.getElementById('testVoice').addEventListener('click', () => {
+            this.testVoice();
+        });
+        
+        // Prevent app from sleeping
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                console.log('📱 App chuyển sang background');
+            } else {
+                console.log('📱 App trở lại foreground');
             }
         });
     }
     
-    toggleSound() {
-        this.soundEnabled = !this.soundEnabled;
-        this.updateSoundButton();
+    loadVoices() {
+        if (!window.speechSynthesis) {
+            console.log('❌ Trình duyệt không hỗ trợ text-to-speech');
+            return;
+        }
+        
+        const loadVoicesFunction = () => {
+            this.voices = window.speechSynthesis.getVoices();
+            this.populateVoiceSelector();
+            console.log('🗣️ Đã tải', this.voices.length, 'giọng nói');
+        };
+        
+        // Load voices
+        loadVoicesFunction();
+        
+        // Some browsers load voices asynchronously
+        window.speechSynthesis.onvoiceschanged = loadVoicesFunction;
     }
     
-    toggleTTS() {
-        this.ttsEnabled = !this.ttsEnabled;
-        this.updateTTSButton();
+    populateVoiceSelector() {
+        const selector = document.getElementById('voiceSelect');
+        
+        // Clear existing options except default ones
+        const defaultOptions = selector.querySelectorAll('option[value="auto"], option[value="default"]');
+        selector.innerHTML = '';
+        defaultOptions.forEach(option => selector.appendChild(option));
+        
+        // Find Vietnamese voices
+        const vietnameseVoices = this.voices.filter(voice => 
+            voice.lang.includes('vi') || 
+            voice.name.toLowerCase().includes('vietnam') ||
+            voice.name.toLowerCase().includes('vietnamese') ||
+            voice.name.toLowerCase().includes('vi-vn')
+        );
+        
+        // Add Vietnamese voices
+        vietnameseVoices.forEach((voice, index) => {
+            const option = document.createElement('option');
+            option.value = voice.name;
+            option.textContent = `🇻🇳 ${voice.name} (${voice.lang})`;
+            selector.appendChild(option);
+        });
+        
+        // Add other quality voices that might work well
+        const otherGoodVoices = this.voices.filter(voice => 
+            !voice.lang.includes('vi') && (
+                voice.lang.includes('en') || 
+                voice.name.toLowerCase().includes('google') ||
+                voice.name.toLowerCase().includes('apple') ||
+                voice.name.toLowerCase().includes('microsoft')
+            )
+        );
+        
+        if (otherGoodVoices.length > 0) {
+            const separator = document.createElement('option');
+            separator.disabled = true;
+            separator.textContent = '────── Giọng khác ──────';
+            selector.appendChild(separator);
+            
+            otherGoodVoices.slice(0, 10).forEach(voice => {
+                const option = document.createElement('option');
+                option.value = voice.name;
+                option.textContent = `🌐 ${voice.name} (${voice.lang})`;
+                selector.appendChild(option);
+            });
+        }
+        
+        console.log('🗣️ Tìm thấy', vietnameseVoices.length, 'giọng tiếng Việt');
     }
     
-    onVoiceChange(e) {
-        this.selectedVoice = e.target.value;
-    }
-    
-    onSpeedChange(e) {
-        this.voiceSpeed = parseFloat(e.target.value);
-    }
-    
-    onPitchChange(e) {
-        this.voicePitch = parseFloat(e.target.value);
+    getSelectedVoice() {
+        if (this.selectedVoice === 'auto') {
+            // Tự động chọn giọng Việt tốt nhất
+            const vietnameseVoices = this.voices.filter(voice => 
+                voice.lang.includes('vi') || 
+                voice.name.toLowerCase().includes('vietnam') ||
+                voice.name.toLowerCase().includes('vietnamese')
+            );
+            
+            if (vietnameseVoices.length > 0) {
+                // Ưu tiên Google, Apple, Microsoft voices
+                const premiumVoice = vietnameseVoices.find(voice => 
+                    voice.name.toLowerCase().includes('google') ||
+                    voice.name.toLowerCase().includes('apple') ||
+                    voice.name.toLowerCase().includes('microsoft')
+                );
+                
+                return premiumVoice || vietnameseVoices[0];
+            }
+            
+            return null;
+        } else if (this.selectedVoice === 'default') {
+            return null;
+        } else {
+            return this.voices.find(voice => voice.name === this.selectedVoice);
+        }
     }
     
     testVoice() {
-        if (this.isSpeaking) return;
-        
         const testData = {
             amount: 500000,
             bank_brand: 'MBBANK',
             content: 'Test giọng đọc'
         };
         
-        this.forceTTS(testData, (success) => {
-            console.log('Test voice result:', success);
-        });
+        this.speakCustomNotification(testData);
     }
     
     handleNewTransaction(data) {
-        const now = Date.now();
-        const transactionId = data.transaction_id || data.id || `${data.bank_brand}_${data.amount}_${now}`;
+        console.log('🔔 Giao dịch mới:', data);
         
-        // FIX 2: SIMPLE DUPLICATE CHECK
-        if (transactionId === this.lastTransactionId && (now - this.lastTransactionTime) < 5000) {
-            console.log('🚫 Duplicate ignored:', transactionId);
-            return;
-        }
-        
-        this.lastTransactionId = transactionId;
-        this.lastTransactionTime = now;
-        
-        console.log('💰 New transaction:', data);
-        
-        // Add to UI
-        this.addTransactionToUI(data);
-        
-        // Sound notification
-        if (this.soundEnabled) {
-            this.playNotificationSound();
-        }
-        
-        // Voice notification - CHỈ KHI FOREGROUND
-        if (this.ttsEnabled && !document.hidden) {
-            setTimeout(() => {
-                this.forceTTS(data, () => {});
-            }, 300);
-        }
-        
-        // System notification
-        this.showSystemNotification(data);
-        this.showNotificationPopup(data);
-        
-        // Vibrate
-        if (navigator.vibrate) {
-            navigator.vibrate([200, 100, 200]);
-        }
-    }
-    
-    addTransactionToUI(data) {
+        // Add to transactions list
         this.transactions.unshift(data);
         if (this.transactions.length > 50) {
             this.transactions = this.transactions.slice(0, 50);
         }
         
+        // Update stats
         if (data.type === 'credit') {
             this.totalAmount += data.amount;
         }
         
+        // Update UI
         this.updateTransactionsList();
         this.updateStats();
-    }
-    
-    loadVoices() {
-        if (!window.speechSynthesis) return;
         
-        const loadVoicesFunction = () => {
-            this.voices = window.speechSynthesis.getVoices();
-            this.populateVoiceSelector();
-        };
+        // Show popup notification
+        this.showNotificationPopup(data);
         
-        loadVoicesFunction();
-        window.speechSynthesis.onvoiceschanged = loadVoicesFunction;
-    }
-    
-    populateVoiceSelector() {
-        const selector = document.getElementById('voiceSelect');
-        if (!selector) return;
-        
-        // Keep existing options
-        const existingHTML = selector.innerHTML;
-        
-        // Add Vietnamese voices
-        const vietnameseVoices = this.voices.filter(voice => 
-            voice.lang.includes('vi') || 
-            voice.name.toLowerCase().includes('vietnam') ||
-            voice.name.toLowerCase().includes('vietnamese')
-        );
-        
-        vietnameseVoices.forEach(voice => {
-            const option = document.createElement('option');
-            option.value = voice.name;
-            option.textContent = `🇻🇳 ${voice.name}`;
-            selector.appendChild(option);
-        });
-        
-        console.log('🗣️ Found', vietnameseVoices.length, 'Vietnamese voices');
-    }
-    
-    getSelectedVoice() {
-        if (this.selectedVoice === 'auto') {
-            const vietnameseVoices = this.voices.filter(voice => 
-                voice.lang.includes('vi') || voice.name.toLowerCase().includes('vietnam')
-            );
-            return vietnameseVoices[0] || null;
+        // Play sound
+        if (this.soundEnabled) {
+            this.playNotificationSound();
         }
         
-        return this.voices.find(voice => voice.name === this.selectedVoice) || null;
+        // Text-to-speech với âm thanh tùy chỉnh
+        if (this.ttsEnabled) {
+            this.speakCustomNotification(data);
+        }
+        
+        // Show system notification
+        this.showSystemNotification(data);
+        
+        // Vibrate (if supported)
+        if (navigator.vibrate) {
+            navigator.vibrate([200, 100, 200]);
+        }
     }
     
     updateConnectionStatus(isConnected) {
         const statusElement = document.getElementById('connectionStatus');
-        if (!statusElement) return;
-        
         const dot = statusElement.querySelector('.status-dot');
         const text = statusElement.querySelector('span:last-child');
         
         if (isConnected) {
             dot.className = 'status-dot online';
-            text.textContent = 'Kết nối real-time ✅';
+            text.textContent = 'Đã kết nối';
         } else {
             dot.className = 'status-dot offline';
-            text.textContent = 'Đang kết nối lại...';
+            text.textContent = 'Mất kết nối';
         }
     }
     
     updateTransactionsList() {
         const container = document.getElementById('transactionsList');
-        if (!container) return;
         
         if (this.transactions.length === 0) {
             container.innerHTML = '<div class="no-transactions">Chưa có giao dịch nào...</div>';
@@ -557,29 +317,24 @@ class BankTingTing {
                     ${transaction.content}
                 </div>
                 <div class="transaction-details">
-                    ${transaction.bank_brand} • ${transaction.account_number}
+                    ${this.getBankDisplayName(transaction.bank_brand)} • ${transaction.account_number}
                 </div>
             </div>
         `).join('');
     }
     
     updateStats() {
-        const totalEl = document.getElementById('totalTransactions');
-        const amountEl = document.getElementById('totalAmount');
-        
-        if (totalEl) totalEl.textContent = this.transactions.length;
-        if (amountEl) amountEl.textContent = this.formatMoney(this.totalAmount);
+        document.getElementById('totalTransactions').textContent = this.transactions.length;
+        document.getElementById('totalAmount').textContent = this.formatMoney(this.totalAmount);
     }
     
     showNotificationPopup(data) {
         const popup = document.getElementById('notificationPopup');
-        if (!popup) return;
-        
         const amount = popup.querySelector('.notification-amount');
         const desc = popup.querySelector('.notification-desc');
         
-        if (amount) amount.textContent = `+${this.formatMoney(data.amount)}`;
-        if (desc) desc.textContent = data.content;
+        amount.textContent = `+${this.formatMoney(data.amount)}`;
+        desc.textContent = data.content;
         
         popup.classList.remove('hidden');
         
@@ -589,63 +344,115 @@ class BankTingTing {
     }
     
     playNotificationSound() {
-        try {
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        // Tạo âm thanh "TING TING" đặc trưng
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // Âm đầu tiên - TING
+        const oscillator1 = audioContext.createOscillator();
+        const gainNode1 = audioContext.createGain();
+        oscillator1.connect(gainNode1);
+        gainNode1.connect(audioContext.destination);
+        
+        oscillator1.frequency.setValueAtTime(800, audioContext.currentTime);
+        gainNode1.gain.setValueAtTime(0.3, audioContext.currentTime);
+        gainNode1.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+        
+        oscillator1.start(audioContext.currentTime);
+        oscillator1.stop(audioContext.currentTime + 0.2);
+        
+        // Âm thứ hai - TING (sau 0.1 giây)
+        setTimeout(() => {
+            const oscillator2 = audioContext.createOscillator();
+            const gainNode2 = audioContext.createGain();
+            oscillator2.connect(gainNode2);
+            gainNode2.connect(audioContext.destination);
             
-            // TING 1
-            const osc1 = audioContext.createOscillator();
-            const gain1 = audioContext.createGain();
-            osc1.connect(gain1);
-            gain1.connect(audioContext.destination);
+            oscillator2.frequency.setValueAtTime(900, audioContext.currentTime);
+            gainNode2.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gainNode2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
             
-            osc1.frequency.setValueAtTime(800, audioContext.currentTime);
-            gain1.gain.setValueAtTime(0.3, audioContext.currentTime);
-            gain1.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
-            
-            osc1.start(audioContext.currentTime);
-            osc1.stop(audioContext.currentTime + 0.2);
-            
-            // TING 2
-            setTimeout(() => {
-                const osc2 = audioContext.createOscillator();
-                const gain2 = audioContext.createGain();
-                osc2.connect(gain2);
-                gain2.connect(audioContext.destination);
-                
-                osc2.frequency.setValueAtTime(900, audioContext.currentTime);
-                gain2.gain.setValueAtTime(0.3, audioContext.currentTime);
-                gain2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
-                
-                osc2.start(audioContext.currentTime);
-                osc2.stop(audioContext.currentTime + 0.2);
-            }, 100);
-            
-            console.log('🔊 TING TING!');
-        } catch (error) {
-            console.error('❌ Sound failed:', error);
-        }
+            oscillator2.start(audioContext.currentTime);
+            oscillator2.stop(audioContext.currentTime + 0.2);
+        }, 100);
     }
     
+    // Hàm lấy tên phát âm ngân hàng
     getBankPronunciation(bankCode) {
-        return this.bankPronunciations[bankCode] || 
-               this.bankPronunciations[bankCode?.toUpperCase()] ||
-               bankCode?.toLowerCase().replace(/bank/gi, 'băng') || 
-               'ngân hàng';
+        const pronunciation = this.bankPronunciations[bankCode] || 
+                            this.bankPronunciations[bankCode?.toUpperCase()] ||
+                            bankCode?.toLowerCase().replace(/bank/gi, 'băng') || 
+                            'ngân hàng';
+        return pronunciation;
+    }
+    
+    // Hàm lấy tên hiển thị ngân hàng
+    getBankDisplayName(bankCode) {
+        return bankCode || 'Unknown';
+    }
+    
+    // Hàm phát âm tùy chỉnh
+    speakCustomNotification(data) {
+        if (!window.speechSynthesis) {
+            console.log('❌ Trình duyệt không hỗ trợ text-to-speech');
+            return;
+        }
+        
+        // Tạo câu phát âm tùy chỉnh
+        const bankName = this.getBankPronunciation(data.bank_brand);
+        const amount = this.formatMoney(data.amount);
+        
+        // Câu phát âm: "Việt tin băng nhận được [số tiền] đồng, Cám ơn quý Khách"
+        const customText = `${bankName} nhận được ${amount} đồng. Cám ơn quý Khách.`;
+        
+        console.log('🗣️ Phát âm:', customText);
+        
+        const utterance = new SpeechSynthesisUtterance(customText);
+        
+        // Cấu hình giọng nói với settings từ user
+        utterance.lang = 'vi-VN';
+        utterance.rate = this.voiceSpeed;
+        utterance.pitch = this.voicePitch;
+        utterance.volume = 0.9;
+        
+        // Sử dụng giọng đã chọn
+        const selectedVoice = this.getSelectedVoice();
+        if (selectedVoice) {
+            utterance.voice = selectedVoice;
+            console.log('✅ Sử dụng giọng:', selectedVoice.name);
+        } else {
+            console.log('⚠️ Sử dụng giọng mặc định');
+        }
+        
+        // Xử lý lỗi
+        utterance.onerror = (event) => {
+            console.error('❌ Lỗi text-to-speech:', event.error);
+        };
+        
+        utterance.onend = () => {
+            console.log('✅ Hoàn thành phát âm');
+        };
+        
+        // Phát âm
+        window.speechSynthesis.speak(utterance);
     }
     
     async requestNotificationPermission() {
-        if ('Notification' in window && Notification.permission === 'default') {
-            const permission = await Notification.requestPermission();
-            console.log('🔔 Notification permission:', permission);
+        if (!('Notification' in window)) return;
+        
+        if (Notification.permission === 'default') {
+            await Notification.requestPermission();
         }
     }
     
     showSystemNotification(data) {
         if (!('Notification' in window) || Notification.permission !== 'granted') return;
         
+        const bankName = this.getBankDisplayName(data.bank_brand);
+        
         const notification = new Notification('BANK-TING-TING 🔔', {
-            body: `${data.bank_brand} nhận được +${this.formatMoney(data.amount)}đ`,
+            body: `${bankName} nhận được +${this.formatMoney(data.amount)}đ\n${data.content}`,
             icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">💰</text></svg>',
+            badge: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🔔</text></svg>',
             tag: 'bank-transaction',
             requireInteraction: false,
             silent: false
@@ -656,57 +463,59 @@ class BankTingTing {
             notification.close();
         };
         
-        setTimeout(() => notification.close(), 6000);
+        setTimeout(() => notification.close(), 8000);
     }
     
     updateSoundButton() {
         const btn = document.getElementById('toggleSound');
-        if (btn) {
-            btn.textContent = this.soundEnabled ? '🔊 Tắt âm thanh' : '🔇 Bật âm thanh';
-            btn.className = this.soundEnabled ? 'btn btn-primary' : 'btn btn-secondary';
-        }
+        btn.textContent = this.soundEnabled ? '🔊 Tắt âm thanh' : '🔇 Bật âm thanh';
+        btn.className = this.soundEnabled ? 'btn btn-primary' : 'btn btn-secondary';
     }
     
     updateTTSButton() {
         const btn = document.getElementById('toggleTTS');
-        if (btn) {
-            btn.textContent = this.ttsEnabled ? '🗣️ Tắt giọng nói' : '🔇 Bật giọng nói';
-            btn.className = this.ttsEnabled ? 'btn btn-primary' : 'btn btn-secondary';
-        }
+        btn.textContent = this.ttsEnabled ? '🗣️ Tắt giọng nói' : '🔇 Bật giọng nói';
+        btn.className = this.ttsEnabled ? 'btn btn-primary' : 'btn btn-secondary';
     }
     
     async sendTestNotification() {
         try {
-            console.log('🧪 Sending test...');
             const response = await fetch('/test-notification', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' }
             });
             
             if (response.ok) {
-                console.log('✅ Test sent');
+                console.log('✅ Đã gửi test notification');
             }
         } catch (error) {
-            console.error('❌ Test failed:', error);
+            console.error('❌ Lỗi gửi test notification:', error);
         }
     }
     
-    async preventSleep() {
+    preventSleep() {
+        // Giữ màn hình sáng bằng cách request wake lock
         if ('wakeLock' in navigator) {
-            try {
-                this.wakeLock = await navigator.wakeLock.request('screen');
-                console.log('🔒 Wake lock active');
+            navigator.wakeLock.request('screen').then(wakeLock => {
+                console.log('🔒 Screen wake lock active');
                 
-                document.addEventListener('visibilitychange', async () => {
-                    if (document.visibilityState === 'visible' && this.wakeLock?.released) {
-                        this.wakeLock = await navigator.wakeLock.request('screen');
+                document.addEventListener('visibilitychange', () => {
+                    if (document.visibilityState === 'visible') {
+                        navigator.wakeLock.request('screen');
                     }
                 });
-                
-            } catch (err) {
-                console.log('❌ Wake lock failed:', err);
-            }
+            }).catch(err => {
+                console.log('❌ Wake lock error:', err);
+            });
         }
+        
+        // Fallback: tạo audio im lặng để giữ app hoạt động
+        setInterval(() => {
+            if (document.hidden) {
+                const audio = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=');
+                audio.play().catch(() => {});
+            }
+        }, 30000);
     }
     
     formatMoney(amount) {
@@ -720,21 +529,18 @@ class BankTingTing {
             second: '2-digit'
         });
     }
-    
-    destroy() {
-        if (this.socket) this.socket.disconnect();
-        if (this.wakeLock) this.wakeLock.release();
-        if (this.backgroundInterval) clearInterval(this.backgroundInterval);
-    }
 }
 
-// Initialize
+// Khởi tạo ứng dụng khi DOM đã sẵn sàng
 document.addEventListener('DOMContentLoaded', () => {
-    if (window.bankTingTing) {
-        window.bankTingTing.destroy();
-    }
-    
     window.bankTingTing = new BankTingTing();
 });
 
-console.log('🚀 BANK-TING-TING Fixed & Working!');
+// Service Worker cho PWA
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+            .then(registration => console.log('✅ SW registered'))
+            .catch(error => console.log('❌ SW registration failed'));
+    });
+}
