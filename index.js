@@ -19,13 +19,75 @@ const PORT = process.env.PORT || 3000;
 let connectedClients = [];
 let isShuttingDown = false;
 
+// App version để cache busting
+const APP_VERSION = process.env.APP_VERSION || Date.now().toString();
+const IS_DEVELOPMENT = process.env.NODE_ENV !== 'production';
+
 // Middleware - minimal
 app.use(cors());
 app.use(bodyParser.json({ limit: '1mb' }));
-app.use(express.static(path.join(__dirname, 'public'), {
-  maxAge: '1d',
-  etag: false
-}));
+
+// ===============================
+// FIXED CACHE CONFIGURATION
+// ===============================
+if (IS_DEVELOPMENT) {
+  // DEVELOPMENT: NO CACHE - để dễ development
+  app.use(express.static(path.join(__dirname, 'public'), {
+    maxAge: 0, // Không cache
+    etag: true, // Bật ETag để check file changes
+    lastModified: true,
+    setHeaders: (res, path) => {
+      // Force no cache cho development
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      
+      // Thêm version header
+      res.setHeader('X-App-Version', APP_VERSION);
+      res.setHeader('X-Cache-Mode', 'development');
+      
+      console.log(`📁 Serving: ${path} (no-cache)`);
+    }
+  }));
+} else {
+  // PRODUCTION: SMART CACHE - cache nhưng có cache busting
+  app.use(express.static(path.join(__dirname, 'public'), {
+    maxAge: '5m', // Cache 5 phút thay vì 1 ngày
+    etag: true, // Bật ETag để auto-refresh khi file thay đổi
+    lastModified: true,
+    setHeaders: (res, path) => {
+      // Production cache với auto-refresh capability
+      res.setHeader('Cache-Control', 'public, max-age=300, must-revalidate'); // 5 phút
+      res.setHeader('X-App-Version', APP_VERSION);
+      res.setHeader('X-Cache-Mode', 'production');
+      
+      // Cache riêng cho các loại file
+      if (path.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'public, max-age=60, must-revalidate'); // HTML: 1 phút
+      } else if (path.endsWith('.js') || path.endsWith('.css')) {
+        res.setHeader('Cache-Control', 'public, max-age=300, must-revalidate'); // JS/CSS: 5 phút
+      }
+    }
+  }));
+}
+
+// ===============================
+// CACHE BUSTING MIDDLEWARE
+// ===============================
+app.use((req, res, next) => {
+  // Thêm no-cache headers cho các request động
+  if (req.path.includes('/api/') || req.path.includes('/webhook/')) {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
+  
+  // Thêm app version vào tất cả response
+  res.setHeader('X-App-Version', APP_VERSION);
+  res.setHeader('X-Timestamp', new Date().toISOString());
+  
+  next();
+});
 
 // Socket.IO - optimized
 io.on('connection', (socket) => {
@@ -37,6 +99,13 @@ io.on('connection', (socket) => {
   console.log('🔗 Client:', socket.id);
   connectedClients.push(socket);
   
+  // Gửi app version cho client để check compatibility
+  socket.emit('app_version', { 
+    version: APP_VERSION, 
+    timestamp: new Date().toISOString(),
+    cacheMode: IS_DEVELOPMENT ? 'development' : 'production'
+  });
+  
   socket.on('disconnect', () => {
     connectedClients = connectedClients.filter(c => c.id !== socket.id);
   });
@@ -46,10 +115,54 @@ io.on('connection', (socket) => {
   });
 });
 
-// Routes - streamlined
+// ===============================
+// ROUTES - với cache headers
+// ===============================
 app.get('/', (req, res) => {
   if (isShuttingDown) return res.status(503).end();
+  
+  // Thêm cache busting cho index.html
+  res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+  res.setHeader('X-App-Version', APP_VERSION);
+  
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Cache busting endpoint - để client check version
+app.get('/api/version', (req, res) => {
+  res.json({
+    version: APP_VERSION,
+    timestamp: new Date().toISOString(),
+    cacheMode: IS_DEVELOPMENT ? 'development' : 'production',
+    nodeEnv: process.env.NODE_ENV || 'development',
+    uptime: Math.floor(process.uptime()),
+    message: IS_DEVELOPMENT ? 
+      'Development mode - files served fresh' : 
+      'Production mode - smart caching enabled'
+  });
+});
+
+// Force refresh endpoint
+app.post('/api/force-refresh', (req, res) => {
+  // Broadcast force refresh tới tất cả clients
+  const refreshData = {
+    reason: 'manual_refresh',
+    timestamp: new Date().toISOString(),
+    newVersion: Date.now().toString()
+  };
+  
+  connectedClients.forEach(client => {
+    try {
+      client.emit('force_refresh', refreshData);
+    } catch (e) {}
+  });
+  
+  console.log(`🔄 Force refresh sent to ${connectedClients.length} clients`);
+  res.json({ 
+    success: true, 
+    sent: connectedClients.length,
+    ...refreshData
+  });
 });
 
 app.post('/webhook/sepay', (req, res) => {
@@ -65,7 +178,8 @@ app.post('/webhook/sepay', (req, res) => {
       account_number: data.account_number || data.accountNumber || '',
       transaction_id: data.transaction_id || data.transactionId || '',
       bank_brand: data.bank_brand || data.gateway || 'Unknown',
-      type: (data.amount || 0) > 0 ? 'credit' : 'debit'
+      type: (data.amount || 0) > 0 ? 'credit' : 'debit',
+      version: APP_VERSION // Thêm version vào notification
     };
     
     // Broadcast efficiently
@@ -115,7 +229,8 @@ app.post('/test-notification', (req, res) => {
       account_number: '1234567890',
       transaction_id: `TEST_${requestTimestamp}`,
       bank_brand: 'MBBANK',
-      type: 'credit'
+      type: 'credit',
+      version: APP_VERSION // Thêm version
     };
     
     // Get active clients ONCE
@@ -164,11 +279,12 @@ app.get('/test-status', (req, res) => {
     nextTestIn: canTest ? 0 : Math.ceil((2000 - timeSinceLastTest) / 1000),
     connectedClients: connectedClients.length,
     activeClients: connectedClients.filter(c => c.connected).length,
-    serverTime: new Date().toISOString()
+    serverTime: new Date().toISOString(),
+    version: APP_VERSION
   });
 });
 
-// Enhanced health endpoint
+// Enhanced health endpoint với cache info
 app.get('/health', (req, res) => {
   const uptime = Math.floor(process.uptime());
   const memory = Math.floor(process.memoryUsage().heapUsed / 1024 / 1024);
@@ -182,7 +298,9 @@ app.get('/health', (req, res) => {
     memory: `${memory}MB`,
     lastTestTime: global.lastTestTime || null,
     canTest: !global.lastTestTime || (Date.now() - global.lastTestTime) >= 2000,
-    version: '2.0-fixed'
+    version: APP_VERSION,
+    cacheMode: IS_DEVELOPMENT ? 'development' : 'production',
+    nodeEnv: process.env.NODE_ENV || 'development'
   });
 });
 
@@ -198,6 +316,13 @@ app.get('/api/limits', (req, res) => {
     },
     webhook: {
       rateLimit: 'Unlimited (production endpoint)'
+    },
+    version: APP_VERSION,
+    cacheInfo: {
+      mode: IS_DEVELOPMENT ? 'development' : 'production',
+      staticFiles: IS_DEVELOPMENT ? 'no-cache' : '5min cache with auto-refresh',
+      html: IS_DEVELOPMENT ? 'no-cache' : '1min cache',
+      api: 'always no-cache'
     }
   });
 });
@@ -220,6 +345,11 @@ if (process.env.NODE_ENV !== 'production') {
         memory: process.memoryUsage(),
         version: process.version,
         platform: process.platform
+      },
+      cache: {
+        mode: IS_DEVELOPMENT ? 'development' : 'production',
+        appVersion: APP_VERSION,
+        headers: 'ETag + LastModified enabled'
       }
     });
   });
@@ -241,12 +371,15 @@ app.use((req, res) => {
     message: `Route ${req.method} ${req.path} not found`,
     availableRoutes: [
       'GET /',
+      'GET /api/version',
+      'POST /api/force-refresh',
       'POST /webhook/sepay', 
       'POST /test-notification',
       'GET /test-status',
       'GET /health',
       'GET /api/limits'
-    ]
+    ],
+    version: APP_VERSION
   });
 });
 
@@ -263,10 +396,14 @@ const shutdown = (signal) => {
     process.exit(0);
   }, 20000);
   
-  // Disconnect all clients immediately
+  // Disconnect all clients immediately với refresh message
   connectedClients.forEach(client => {
     try { 
-      client.emit('server_shutdown', { message: 'Server is restarting...' });
+      client.emit('server_shutdown', { 
+        message: 'Server is restarting...',
+        shouldRefresh: true,
+        newVersion: Date.now().toString()
+      });
       client.disconnect(true); 
     } catch (e) {}
   });
@@ -324,11 +461,13 @@ global.lastTestTime = null;
 // Start server
 server.listen(PORT, () => {
   console.log('🚀 =====================================');
-  console.log('🏦 BANK-TING-TING v2.1 - FIXED DUPLICATES');
+  console.log('🏦 BANK-TING-TING v2.2 - FIXED CACHE');
   console.log(`📡 Port: ${PORT}`);
   console.log(`📱 URL: https://bank-ting-ting-771db69fc368.herokuapp.com`);
-  console.log('🔧 Fixed: No duplicate test notifications');
-  console.log('🔧 Fixed: Rate limiting enabled');
+  console.log(`🔧 Cache Mode: ${IS_DEVELOPMENT ? 'Development (no-cache)' : 'Production (smart cache)'}`);
+  console.log(`📦 App Version: ${APP_VERSION}`);
+  console.log('🔧 Fixed: Browser cache issues');
+  console.log('🔧 Fixed: Auto-refresh on file changes');
   console.log('🎯 Ready! TING TING! 🔔');
   console.log('🚀 =====================================');
 });
